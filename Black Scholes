@@ -1,0 +1,13 @@
+S <- 10
+K <- 12
+r <- 0.03
+T <- 1
+desv <- 0.2
+d1 <- (log(S/K)+(r+(desv^2)/2)*T)/(desv*sqrt(T))
+d2 <- d1 - desv*sqrt(T)
+Call <- round(S*pnorm(d1) - K*exp(-r*T)*pnorm(d2), 2)
+Put <- round(K*exp(-r*T)*pnorm(-d2) - S*pnorm(-d1), 2)
+names(Call) <- c("Preço Call")
+names(Put) <- c("Preço Put")
+print(Call)
+print(Put)
