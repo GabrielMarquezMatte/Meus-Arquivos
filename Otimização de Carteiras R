@@ -27,9 +27,10 @@ carteira_eficiente
 sharpe <- (carteira_eficiente$er-tx_livre_risco)/carteira_eficiente$sd
 sharpe
 carteira_min_risco <- globalMin.portfolio(retorno_medio, matriz_cov, shorts = short_selling)
-
 carteira_min_risco
-fronteira_eficiente <- efficient.frontier(retorno_medio, matriz_cov, npor = 100, shorts = short_selling)
+
+npor <- 100
+fronteira_eficiente <- efficient.frontier(retorno_medio, matriz_cov, npor, shorts = short_selling)
 
 fronteira_eficiente
 
@@ -44,5 +45,5 @@ text(carteira_eficiente$sd, carteira_eficiente$er, labels = "Carteira Eficiente"
 
 tangente <- (carteira_eficiente$er - tx_livre_risco)/carteira_eficiente$sd
 abline(a = tx_livre_risco, b = tangente, col = "green", lwd = 2)
-plot(1:100, (fronteira_eficiente$er - tx_livre_risco)/fronteira_eficiente$sd,
+plot(1:npor, (fronteira_eficiente$er - tx_livre_risco)/fronteira_eficiente$sd,
      col = "blue", ylab = "Índice Sharp", xlab = "Nº Portifólio", type = "l")
