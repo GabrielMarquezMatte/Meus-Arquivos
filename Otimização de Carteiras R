@@ -1,18 +1,23 @@
 install.packages("quadprog")
 install.packages("PerformanceAnalytics")
 install.packages("IntroCompFinR", repos="http://R-Forge.R-project.org")
+
 ativos <- c("BEES3", "TAEE11", "LREN3", "AAPL", "TRPL4")
 bees_ret <- c(-0.1423,3.9837,0.5007,0.4186,0.2244,0.4578)
 taee_ret <- c(0.0357,-0.1184,0.2471,0.0304,0.1734,0.2578)
 lren_ret <- c(0.2784,0.1529,0.4116,0.7283,0.2019,0.4905)
 aapl_ret <- c(0.5641,0.4082,-0.0730,0.4734,0.0861,0.9635)
 trpl_ret <- c(0.6202,0.1148,0.4727,0.0828,0.2451,0.3894)
+
 retornos <- cbind(bees_ret, taee_ret, lren_ret, aapl_ret, trpl_ret)
 colnames(retornos) <- ativos
 retornos
-retorno_medio <- rbind(mean(retornos[,1]), mean(retornos[,2]), mean(retornos[,3]), mean(retornos[,4]), mean(retornos[,5]))
+
+retorno_medio <- rbind(mean(retornos[,1]), mean(retornos[,2]),
+     mean(retornos[,3]), mean(retornos[,4]), mean(retornos[,5]))
 rownames(retorno_medio) <- ativos
 retorno_medio
+
 matriz_cov <- cov(retornos)
 
 rownames(matriz_cov) <- ativos
@@ -21,29 +26,29 @@ colnames(matriz_cov) <- ativos
 matriz_cov
 tx_livre_risco <- 0.03
 short_selling <- FALSE
-carteira_eficiente <- tangency.portfolio(retorno_medio, matriz_cov, tx_livre_risco, shorts = short_selling)
 
+carteira_eficiente <- tangency.portfolio(retorno_medio, matriz_cov,
+     tx_livre_risco, shorts = short_selling)
 carteira_eficiente
+
 sharpe <- (carteira_eficiente$er-tx_livre_risco)/carteira_eficiente$sd
 sharpe
+
 carteira_min_risco <- globalMin.portfolio(retorno_medio, matriz_cov, shorts = short_selling)
 carteira_min_risco
 
 npor <- 100
 fronteira_eficiente <- efficient.frontier(retorno_medio, matriz_cov, npor, shorts = short_selling)
-
 fronteira_eficiente
-
 attributes(fronteira_eficiente)
-plot(fronteira_eficiente, plot.asset = TRUE, col = "blue", pch = 16)
 
+plot(fronteira_eficiente, plot.asset = TRUE, col = "blue", pch = 16)
 points(carteira_min_risco$sd, carteira_min_risco$er, col = "green", pch = 10, cex = 2)
 points(carteira_eficiente$sd, carteira_eficiente$er, col = "red", pch = 10, cex = 2)
-
 text(carteira_min_risco$sd, carteira_min_risco$er, labels = "Risco Mínimo", pos = 2)
 text(carteira_eficiente$sd, carteira_eficiente$er, labels = "Carteira Eficiente", pos = 2)
-
 tangente <- (carteira_eficiente$er - tx_livre_risco)/carteira_eficiente$sd
 abline(a = tx_livre_risco, b = tangente, col = "green", lwd = 2)
+
 plot(1:npor, (fronteira_eficiente$er - tx_livre_risco)/fronteira_eficiente$sd,
      col = "blue", ylab = "Índice Sharp", xlab = "Nº Portifólio", type = "l")
