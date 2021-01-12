@@ -43,15 +43,38 @@ carteira <- function(data.framee){
            aporte = price*n_acoes*moeda,
            aporte = na.fill(aporte,0),
            valor_tot = cumsum(n_acoes)*close+cumsum(value)*cumsum(n_acoes),
-           retorno = c(0,
+           price = NULL,
+           moeda = NULL) %>%
+    select(symbol,date,close,n_acoes,value,aporte,valor_tot)
+  tota <- data.frame(date = seq(dplyr::first(data.framee$date),
+                                Sys.Date(),"1 day"))
+  tota <- left_join(tota,val,"date") %>%
+    mutate(aporte = na.fill(aporte,0),
+           value = na.fill(value,0),
+           n_acoes = na.fill(n_acoes,0))
+  for(j in c(2,3,7)){
+    for(i in 2:nrow(tota)){
+      if(is.na(tota[i,j])){
+        tota[i,j] <- tota[i-1,j]
+      }
+    }
+  }
+  if(!all(tota$date != unique(tota$date))){
+    tota <- tota %>%
+      group_by(date) %>%
+      summarise(date = dplyr::last(date),symbol = dplyr::last(symbol),
+                close = dplyr::last(close),n_acoes = sum(n_acoes),
+                value = sum(value),aporte = sum(aporte),
+                valor_tot = dplyr::last(valor_tot))
+  }
+  tota <- tota %>%
+    mutate(retorno = c(0,
                        valor_tot[2:length(valor_tot)]-
                          aporte[2:length(valor_tot)]-valor_tot[2:length(valor_tot)-1]),
            retorno = c(0,retorno[2:length(valor_tot)]/
-                         (valor_tot[2:length(valor_tot)-1]+aporte[2:length(valor_tot)])),
-           price = NULL,
-           moeda = NULL)
-  val$retorno[1] <- val$valor_tot[1]/val$aporte[1]-1
-  return(val)
+                         (valor_tot[2:length(valor_tot)-1]+aporte[2:length(valor_tot)])))
+  tota$retorno[1] <- tota$valor_tot[1]/tota$aporte[1]-1
+  return(tota)
 }
 carteira_tot <- function(lista){
   options(warn = -1)
@@ -68,10 +91,9 @@ carteira_tot <- function(lista){
     tot <- rbind(tot,cart[[i]])
   }
   total <- tot %>%
-    filter(date %in% datas) %>%
     group_by(date) %>%
     summarise(aporte = sum(aporte),
-              valor_tot = dplyr::last(valor_tot),
+              valor_tot = sum(valor_tot),
               value = sum(value))
   total <- total %>%
     mutate(retorno = c(0,valor_tot[2:length(valor_tot)]-
