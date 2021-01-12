@@ -78,13 +78,6 @@ carteira <- function(data.framee){
 }
 carteira_tot <- function(lista){
   options(warn = -1)
-  data <- grepl("date",names(unlist(lista)))
-  data <- min(unlist(lista)[data]) %>%
-    as.numeric() %>%
-    as.Date()
-  ibov <- tq_get("^BVSP", from = data) %>%
-    na.omit()
-  datas <- ibov$date
   cart <- lapply(lista,carteira)
   tot <- data.frame()
   for(i in 1:length(cart)){
