@@ -131,12 +131,13 @@ carteira_tot <- function(lista){
            retorno = c(0,retorno[2:length(valor_tot)]/
                          (valor_tot[2:length(valor_tot)-1]+aporte[2:length(valor_tot)])))
   total$retorno[1] <- total$valor_tot[1]/total$aporte[1]-1
-  total <- total %>%
-    filter(retorno > -1)%>%
-    mutate(retorno = c(0,valor_tot[2:length(valor_tot)]-
-                         valor_tot[2:length(valor_tot)-1]-aporte[2:length(valor_tot)]),
-           retorno = c(0,retorno[2:length(valor_tot)]/
-                         (valor_tot[2:length(valor_tot)-1]+aporte[2:length(valor_tot)])))
-  total$retorno[1] <- total$valor_tot[1]/total$aporte[1]-1
-  return(total)
+  pesos <- tot %>%
+    group_by(date) %>%
+    summarise(symbol,pesos = valor_tot/sum(valor_tot)) %>%
+    group_by(date,symbol) %>%
+    summarise(pesos = sum(pesos)) %>%
+    filter(pesos != 0)
+  listaa <- list(retornos = total,
+                 pesos = pesos)
+  return(listaa)
 }
