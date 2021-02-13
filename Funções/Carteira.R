@@ -107,7 +107,7 @@ valor_cota <- function(cnpj, data_inicio = Sys.Date()-365, data_fim = Sys.Date()
 carteira <- function(data.framee){
   #data.frame(symbol,date,price,n_acoes,moeda = NA ou moeda de preferência)
   options(warn = -1)
-  pacotes <- c("tidyverse","tidyquant","bizdays","GetTDData","rbcb")
+  pacotes <- c("tidyverse","tidyquant","GetTDData","rbcb")
   for(i in pacotes){
     suppressPackageStartupMessages(require(i,character.only = T))
   }
@@ -118,7 +118,7 @@ carteira <- function(data.framee){
     data.framee$vencimento <- NA
   }
   if(is.null(data.framee$benchmark)){
-    data.framee$benchmark <- NA
+    data.framee$benchmark <- 1
   }
   if(is.null(data.framee$symbol)){
     data.framee$symbol <- NA
