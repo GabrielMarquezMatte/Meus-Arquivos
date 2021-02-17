@@ -20,6 +20,13 @@ get_atual <- function(x){
              `Adj Close**` = gsub("-",NA,`Adj Close**`, fixed = T),
              Volume = gsub("-",NA,`Adj Close**`, fixed = T))
     tabela1 <- tq_get(x,from = Sys.Date()-5)
+    if(nrow(tabela1) >= 2){
+      for(i in 2:nrow(tabela1)){
+        if(is.na(tabela1$close[i])){
+          tabela1$close[i] <- tabela1$close[i-1]
+        }
+      }
+    }
     tabela <- tabela %>%
       mutate(symbol = x,
              Open = as.numeric(Open),
@@ -107,7 +114,7 @@ valor_cota <- function(cnpj, data_inicio = Sys.Date()-365, data_fim = Sys.Date()
 carteira <- function(data.framee){
   #data.frame(symbol,date,price,n_acoes,moeda = NA ou moeda de preferência)
   options(warn = -1)
-  pacotes <- c("tidyverse","tidyquant","GetTDData","rbcb")
+  pacotes <- c("tidyverse","tidyquant","GetTDData","Quandl")
   for(i in pacotes){
     suppressPackageStartupMessages(require(i,character.only = T))
   }
@@ -204,8 +211,12 @@ carteira <- function(data.framee){
              symbol = dataa$symbol)
   }
   try(if(dataa$symbol == "CDI"){
-    valores <- get_series(c(CDI = 12), start_date = dataa$date) %>%
-      summarise(date,close = cumprod((CDI/100)*dataa$benchmark+1)*1000) %>%
+    Quandl.api_key("sPcpUeyLAs8vUHiAZpdc")
+    valores <- Quandl("BCB/12", start_date = dataa$date)
+    valores <- valores[nrow(valores):1,]  
+    valores <- valores %>%
+      summarise(date = Date,
+                close = cumprod((Value/100)*dataa$benchmark+1)*1000) %>%
       suppressMessages()
     valores <- left_join(tota,valores,"date")
     for(i in 2:nrow(valores)){
@@ -267,7 +278,8 @@ carteira <- function(data.framee){
                        valor_tot[2:length(valor_tot)]-
                          aporte[2:length(valor_tot)]-valor_tot[2:length(valor_tot)-1]),
            retorno = c(0,retorno[2:length(valor_tot)]/
-                         (valor_tot[2:length(valor_tot)-1]+aporte[2:length(valor_tot)])))
+                         (valor_tot[2:length(valor_tot)-1]+aporte[2:length(valor_tot)])),
+           n_acoes = cumsum(n_acoes))
   val$retorno[1] <- val$valor_tot[1]/val$aporte[1]-1
   return(val)
 }
@@ -293,25 +305,26 @@ carteira_tot <- function(lista){
   total <- total %>%
     filter(retorno != 0)
   pesos <- tot %>%
-    group_by(symbol) %>%
-    mutate(n_acoes1 = cumsum(n_acoes)) %>%
     group_by(date) %>%
     summarise(symbol = symbol,pesos = valor_tot/sum(valor_tot),
               valor_tot, n_acoes,close,
-              aporte, preco_med, n_acoes1) %>%
+              aporte, preco_med) %>%
     group_by(symbol, date) %>%
-    summarise(symbol = dplyr::last(symbol), pesos = sum(pesos),
+    summarise(symbol = dplyr::last(symbol), 
+              pesos = sum(pesos),
               valor_tot = sum(valor_tot),
+              lucro = sum(n_acoes*(close-preco_med)),
               n_acoes = sum(n_acoes),
               aporte = sum(aporte),
               preco_med = dplyr::last(preco_med),
-              close = sum(close*n_acoes1)/sum(n_acoes1)) %>%
+              close = max(close)) %>%
     group_by(symbol) %>%
-    summarise(date,pesos,valor_tot,n_acoes = cumsum(n_acoes),
+    summarise(date,pesos,valor_tot,n_acoes = n_acoes,
               aporte,preco_med,close,
               retorno = c(valor_tot[1]/aporte[1]-1,(diff(valor_tot)-aporte[-1])/
                             (valor_tot[-length(valor_tot)]+aporte[-1])),
               retorno_tot = cumprod(retorno+1)-1,
+              lucro,
               retorno_ativo = close/close[1]-1) %>%
     filter(pesos != 0) %>%
     suppressMessages()
@@ -320,7 +333,6 @@ carteira_tot <- function(lista){
     mutate(retorno = c(valor_tot[1]/aporte[1]-1,(diff(valor_tot)-aporte[-1])/
                          (valor_tot[-length(valor_tot)]+aporte[-1])),
            retorno_tot = cumprod(retorno+1)-1,
-           lucro = n_acoes*(close-preco_med),
            retorno_na_carteira = retorno*pesos)
   listaa <- list(retornos = total,
                  pesos = pesos)
