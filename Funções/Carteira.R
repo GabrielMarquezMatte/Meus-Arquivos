@@ -20,13 +20,13 @@ get_atual <- function(x){
              `Adj Close**` = gsub("-",NA,`Adj Close**`, fixed = T),
              Volume = gsub("-",NA,`Adj Close**`, fixed = T))
     tabela1 <- tq_get(x,from = Sys.Date()-5)
-    if(nrow(tabela1) >= 2){
+    try(if(nrow(tabela1) >= 2){
       for(i in 2:nrow(tabela1)){
         if(is.na(tabela1$close[i])){
           tabela1$close[i] <- tabela1$close[i-1]
         }
       }
-    }
+    },silent = T)
     tabela <- tabela %>%
       mutate(symbol = x,
              Open = as.numeric(Open),
@@ -111,6 +111,39 @@ valor_cota <- function(cnpj, data_inicio = Sys.Date()-365, data_fim = Sys.Date()
   }
   return(cota)
 }
+retorno_carteira <- function(valor,aporte){
+  retorno <- numeric(length(valor))
+  for(i in 2:length(retorno)){
+    if(round(valor[i],2) == 0 & aporte[i] == 0){
+      retorno[i] <- 0
+    }else if(aporte[i] < 0 & round(valor[i],2) == 0){
+      retorno[i] <- (-aporte[i])/valor[i-1]-1
+    }else{
+      retorno[i] <- (valor[i]-valor[i-1]-aporte[i])/
+        (valor[i-1]+aporte[i])
+    }
+  }
+  retorno[1] <- valor[1]/aporte[1]-1
+  return(retorno)
+}
+preco_medio <- function(n_acoes,price){
+  n_acoes1 <- cumsum(n_acoes)
+  n_acoes2 <- as.numeric(n_acoes)
+  n_acoes2 <- ifelse(n_acoes2 < 0, 0, n_acoes2)
+  precos <- as.numeric(price)
+  pm <- cumsum(precos*n_acoes2)/cumsum(n_acoes2)
+  tem <- T
+  zero <- which(n_acoes1 == 0)
+  try(tem <- zero == length(n_acoes),silent = T)
+  if(length(zero) > 1){
+    for(i in 2:length(zero)){
+      zero1 <- zero[i-1]
+      pm[-(1:zero1)] <- cumsum(n_acoes2[-(1:zero1)]*precos[-(1:zero1)])/
+        cumsum(n_acoes2[-(1:zero1)])
+    }
+  }
+  pm
+}
 carteira <- function(data.framee){
   #data.frame(symbol,date,price,n_acoes,moeda = NA ou moeda de preferência)
   options(warn = -1)
@@ -138,7 +171,11 @@ carteira <- function(data.framee){
   dataa <- data.framee[1,]
   tota <- data.frame(date = seq(dataa$date,
                                 Sys.Date(),"1 day"))
-  message(glue::glue("Consolidando {dataa$symbol}"))
+  if(is.na(dataa$symbol)){
+    message(glue::glue("Consolidando {dataa$cnpj}"))
+  }else{
+    message(glue::glue("Consolidando {dataa$symbol}"))
+  }
   if(!(dataa$symbol %in% c("NTN-B","NTN-B Principal","LTN","LFT","NTN-F","CDI")) &
      !is.na(dataa$symbol)){
     valores <- tq_get(dplyr::first(data.framee$symbol), 
@@ -260,80 +297,98 @@ carteira <- function(data.framee){
            aporte = zoo::na.fill(aporte,0) %>% as.numeric,
            valor_tot = cumsum(n_acoes)*close,
            moeda = NULL,
-           preco_med = ifelse(n_acoes > 0,n_acoes,0),
-           preco_med = cumsum(preco_med*price)/cumsum(preco_med)) %>%
-    select(symbol,date,close,n_acoes,value,aporte,valor_tot,preco_med)
+           preco_med = preco_medio(n_acoes,price),
+           lucro = cumsum(n_acoes)*(close-preco_med),
+           aporte1 = ifelse(aporte <0, aporte, 0),
+           lucro_realizado = -(cumsum(n_acoes)*(price-preco_med))/
+             valor_tot*aporte1) %>%
+    select(symbol,date,close,n_acoes,dividendos = value,
+           aporte,valor_tot,preco_med,lucro,lucro_realizado,
+           price)
+  for(i in 2:nrow(val)){
+    if(sum(val$n_acoes[1:i]) == 0 & 
+       val$aporte[i] != 0){
+      val$lucro_realizado[i] <- (val$price[i]-val$preco_med[i])*
+        cumsum(val$n_acoes[1:i])[i-1]
+    }else{
+      val$lucro_realizado[i] <- val$lucro_realizado[i]
+    }
+  }
   if(!all(val$date != unique(val$date))){
     val <- val %>%
       group_by(date) %>%
       summarise(date = dplyr::last(date),symbol = dplyr::last(symbol),
                 close = dplyr::last(close),n_acoes = sum(n_acoes),
-                value = sum(value),aporte = sum(aporte),
+                dividendos = sum(dividendos),aporte = sum(aporte),
                 valor_tot = dplyr::last(valor_tot),
-                preco_med = dplyr::last(preco_med)) %>%
+                preco_med = dplyr::last(preco_med),
+                lucro = tail(lucro,1),
+                lucro_realizado = tail(lucro_realizado,1)) %>%
       suppressMessages()
   }
   val <- val %>%
-    mutate(retorno = c(0,
-                       valor_tot[2:length(valor_tot)]-
-                         aporte[2:length(valor_tot)]-valor_tot[2:length(valor_tot)-1]),
-           retorno = c(0,retorno[2:length(valor_tot)]/
-                         (valor_tot[2:length(valor_tot)-1]+aporte[2:length(valor_tot)])),
-           n_acoes = cumsum(n_acoes))
-  val$retorno[1] <- val$valor_tot[1]/val$aporte[1]-1
-  return(val)
+    mutate(retorno = retorno_carteira(valor_tot,aporte),
+           retorno_tot = cumprod(retorno+1)-1,
+           n_acoes = cumsum(n_acoes),
+           lucro_realizado = zoo::na.fill(lucro_realizado,0),
+           lucro_realizado = cumsum(lucro_realizado))
+  return(val %>%
+           select(symbol,date,close,n_acoes,dividendos,
+                  aporte,valor_tot,preco_med,lucro,lucro_realizado,
+                  retorno,retorno_tot))
 }
 carteira_tot <- function(lista){
   options(warn = -1)
   cart <- lapply(lista,carteira)
-  tot <- data.frame()
-  for(i in 1:length(cart)){
-    tot <- rbind(tot,cart[[i]])
-  }
+  tot <- bind_rows(cart)
   total <- tot %>%
     group_by(date) %>%
     summarise(aporte = sum(aporte),
               valor_tot = sum(valor_tot),
-              value = sum(value))
+              dividendos = sum(dividendos),
+              lucro = sum(lucro, na.rm = T),
+              lucro_realizado = sum(lucro_realizado))
   total <- total %>%
-    mutate(retorno = c(0,valor_tot[2:length(valor_tot)]-
-                         valor_tot[2:length(valor_tot)-1]-aporte[2:length(valor_tot)]),
-           retorno = c(0,retorno[2:length(valor_tot)]/
-                         (valor_tot[2:length(valor_tot)-1]+aporte[2:length(valor_tot)])))
-  total$retorno[1] <- total$valor_tot[1]/total$aporte[1]-1
-  total$retorno_tot <- cumprod(total$retorno+1)-1
-  total <- total %>%
-    filter(retorno != 0)
+    mutate(retorno = retorno_carteira(valor_tot,aporte),
+           retorno_tot = cumprod(retorno+1)-1,
+           drawdown = (retorno_tot+1)/cummax(retorno_tot+1)-1)
   pesos <- tot %>%
     group_by(date) %>%
     summarise(symbol = symbol,pesos = valor_tot/sum(valor_tot),
-              valor_tot, n_acoes,close,
+              lucro,lucro_realizado,
+              valor_tot, n_acoes,dividendos,close,
               aporte, preco_med) %>%
     group_by(symbol, date) %>%
     summarise(symbol = dplyr::last(symbol), 
               pesos = sum(pesos),
               valor_tot = sum(valor_tot),
-              lucro = sum(n_acoes*(close-preco_med)),
+              lucro = sum(lucro),
               n_acoes = sum(n_acoes),
+              dividendos = sum(dividendos),
               aporte = sum(aporte),
-              preco_med = dplyr::last(preco_med),
-              close = max(close)) %>%
+              preco_med = sum(preco_med*n_acoes)/sum(n_acoes),
+              close = max(close),
+              lucro_realizado = sum(lucro_realizado)) %>%
     group_by(symbol) %>%
-    summarise(date,pesos,valor_tot,n_acoes = n_acoes,
+    summarise(date,pesos,valor_tot,
+              n_acoes = n_acoes,
+              dividendos,
               aporte,preco_med,close,
-              retorno = c(valor_tot[1]/aporte[1]-1,(diff(valor_tot)-aporte[-1])/
-                            (valor_tot[-length(valor_tot)]+aporte[-1])),
+              retorno = retorno_carteira(valor_tot,aporte),
               retorno_tot = cumprod(retorno+1)-1,
-              lucro,
-              retorno_ativo = close/close[1]-1) %>%
-    filter(pesos != 0) %>%
+              lucro, lucro_realizado,
+              retorno_ativo = close/close[1]-1,
+              retorno_na_carteira = retorno*pesos) %>%
     suppressMessages()
+  total <- total %>%
+    left_join(pesos %>%
+                group_by(date) %>%
+                summarise(diversificacao = 1-sum(pesos^2)),
+              "date") %>%
+    mutate(drawdown = (retorno_tot+1)/cummax(retorno_tot+1)-1,
+           cotas = valor_tot/(retorno_tot+1))
   pesos <- pesos %>%
-    group_by(symbol) %>%
-    mutate(retorno = c(valor_tot[1]/aporte[1]-1,(diff(valor_tot)-aporte[-1])/
-                         (valor_tot[-length(valor_tot)]+aporte[-1])),
-           retorno_tot = cumprod(retorno+1)-1,
-           retorno_na_carteira = retorno*pesos)
+    filter(pesos != 0)
   listaa <- list(retornos = total,
                  pesos = pesos)
   return(listaa)
