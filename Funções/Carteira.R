@@ -1,53 +1,25 @@
 get_atual <- function(x){
-  pacotes <- c("tidyverse", "glue","rvest")
+  pacotes <- c("tidyverse","reticulate")
   for(i in pacotes){
     suppressPackageStartupMessages(require(i,character.only = T))
   }
+  si <- NA
+  try(si <- import("yahoo_fin.stock_info","si"),silent = T)
+  if(is.na(si)){
+    reticulate::py_install("yahoo_fin")
+    si <- import("yahoo_fin.stock_info","si")
+  }
   funcao <- function(x){
-    url <- glue("https://finance.yahoo.com/quote/{x}/history?p={x}")
-    ht <- read_html(url)
-    tabela <- html_table(ht)[[1]][1,]
-    tabela <- tabela %>%
-      mutate(Open = gsub(",","",Open, fixed = T),
-             `Close*` = gsub(",","",`Close*`, fixed = T),
-             High = gsub(",","",High, fixed = T),
-             Low = gsub(",","",Low, fixed = T),
-             `Adj Close**` = gsub(",","",`Adj Close**`, fixed = T),
-             Open = gsub("-",NA,Open, fixed = T),
-             `Close*` = gsub("-",NA,`Close*`, fixed = T),
-             High = gsub("-",NA,High, fixed = T),
-             Low = gsub("-",NA,Low, fixed = T),
-             `Adj Close**` = gsub("-",NA,`Adj Close**`, fixed = T),
-             Volume = gsub("-",NA,`Adj Close**`, fixed = T))
-    tabela1 <- tq_get(x,from = Sys.Date()-5)
-    try(if(nrow(tabela1) >= 2){
-      for(i in 2:nrow(tabela1)){
-        if(is.na(tabela1$close[i])){
-          tabela1$close[i] <- tabela1$close[i-1]
-        }
-      }
-    },silent = T)
-    tabela <- tabela %>%
-      mutate(symbol = x,
-             Open = as.numeric(Open),
-             `Close*` = as.numeric(`Close*`),
-             High = as.numeric(High),
-             Low = as.numeric(Low),
-             `Adj Close**` = as.numeric(`Adj Close**`)) %>%
-      dplyr::select(symbol,Date,Open,High,Low,`Close*`,Volume,`Adj Close**`)
-    colnames(tabela) <- c("symbol","date","open","high","low",
-                          "close","volume","adjusted")
-    decisao <- T
-    try(decisao <- round(tabela1$close[nrow(tabela1)],2)
-        != tabela$close,silent = T)
-    if(is.na(decisao)){decisao <- F}
-    if(decisao){
-      tabela <- tabela  %>%
-        mutate(volume = NA, date = Sys.Date())
-      return(tabela)
-    }else{
-      return()
-    }
+    preco <- si$get_live_price(x)
+    tabela <- data.frame(symbol = x,
+                         date = Sys.Date(),
+                         open = preco,
+                         high = preco,
+                         low = preco,
+                         close = preco,
+                         volume = NA,
+                         adjusted = preco)
+    return(tabela)
   }
   data <- data.frame()
   for(i in 1:length(x)){
@@ -147,7 +119,15 @@ preco_medio <- function(n_acoes,price){
 carteira <- function(data.framee){
   #data.frame(symbol,date,price,n_acoes,moeda = NA ou moeda de preferência)
   options(warn = -1)
-  pacotes <- c("tidyverse","tidyquant","GetTDData","Quandl")
+  pacotes <- c("tidyverse","tidyquant",
+               "GetTDData","Quandl",
+               "reticulate","glue",
+               "httr","rvest")
+  instalados <- pacman::p_isinstalled(pacotes)
+  faltam <- pacotes[!instalados]
+  if(length(faltam) != 0){
+    install.packages(faltam)
+  }
   for(i in pacotes){
     suppressPackageStartupMessages(require(i,character.only = T))
   }
@@ -168,6 +148,7 @@ carteira <- function(data.framee){
   }
   data.framee$vencimento <- as.Date(data.framee$vencimento)
   data.framee$date <- as.Date(data.framee$date)
+  data.framee$benchmark <- as.numeric(data.framee$benchmark)
   dataa <- data.framee[1,]
   tota <- data.frame(date = seq(dataa$date,
                                 Sys.Date(),"1 day"))
@@ -207,6 +188,7 @@ carteira <- function(data.framee){
           moeda[i,2] <- moeda[i-1,2]
         }
       }
+      moeda <- moeda[!duplicated(moeda$date),]
     }else{
       moeda <- data.frame(date = valores$date,
                           moeda = 1)
@@ -245,7 +227,7 @@ carteira <- function(data.framee){
                   select(symbol, date, price, n_acoes,moeda), "date") %>%
       mutate(value = 0,
              moeda = 1,
-             symbol = dataa$symbol)
+             symbol = paste(dataa$symbol,dataa$vencimento))
   }
   try(if(dataa$symbol == "CDI"){
     Quandl.api_key("sPcpUeyLAs8vUHiAZpdc")
@@ -331,7 +313,8 @@ carteira <- function(data.framee){
            retorno_tot = cumprod(retorno+1)-1,
            n_acoes = cumsum(n_acoes),
            lucro_realizado = zoo::na.fill(lucro_realizado,0),
-           lucro_realizado = cumsum(lucro_realizado))
+           lucro_realizado = cumsum(lucro_realizado),
+           lucro = lucro+cumsum(dividendos))
   return(val %>%
            select(symbol,date,close,n_acoes,dividendos,
                   aporte,valor_tot,preco_med,lucro,lucro_realizado,
@@ -350,8 +333,7 @@ carteira_tot <- function(lista){
               lucro_realizado = sum(lucro_realizado))
   total <- total %>%
     mutate(retorno = retorno_carteira(valor_tot,aporte),
-           retorno_tot = cumprod(retorno+1)-1,
-           drawdown = (retorno_tot+1)/cummax(retorno_tot+1)-1)
+           retorno_tot = cumprod(retorno+1)-1)
   pesos <- tot %>%
     group_by(date) %>%
     summarise(symbol = symbol,pesos = valor_tot/sum(valor_tot),
@@ -385,7 +367,7 @@ carteira_tot <- function(lista){
                 group_by(date) %>%
                 summarise(diversificacao = 1-sum(pesos^2)),
               "date") %>%
-    mutate(drawdown = (retorno_tot+1)/cummax(retorno_tot+1)-1,
+    mutate(drawdown = (c(1,retorno_tot+1)/cummax(c(1,retorno_tot+1))-1)[-1],
            cotas = valor_tot/(retorno_tot+1))
   pesos <- pesos %>%
     filter(pesos != 0)
