@@ -128,11 +128,11 @@ preco_medio <- function(n_acoes,price){
   }
   pm
 }
-carteira <- function(data.framee){
+carteira <- function(data.framee,Quandl_api_key = NA){
   #data.frame(symbol,date,price,n_acoes,moeda = NA ou moeda de preferência)
   options(warn = -1)
   pacotes <- c("tidyverse","BatchGetSymbols","GetTDData",
-               "Quandl","glue","httr","rvest","tidyquant")
+               "Quandl","glue","httr","rvest","tidyquant","rbcb")
   instalados <- pacman::p_isinstalled(pacotes)
   faltam <- pacotes[!instalados]
   if(length(faltam) != 0){
@@ -255,13 +255,18 @@ carteira <- function(data.framee){
              symbol = paste(dataa$symbol,dataa$vencimento))
   }
   try(if(dataa$symbol == "CDI"){ #Renda Fixa Pós-fixada
-    Quandl.api_key("sPcpUeyLAs8vUHiAZpdc")
-    valores <- Quandl("BCB/12", start_date = dataa$date)
-    valores <- valores[nrow(valores):1,]  
-    valores <- valores %>%
-      summarise(date = Date,
-                close = cumprod((Value/100)*dataa$benchmark+1)*1000) %>%
-      suppressMessages()
+    if(is.character(Quandl_api_key)){
+      Quandl.api_key(Quandl_api_key)
+      valores <- Quandl("BCB/12", start_date = dataa$date) %>%
+        arrange(Date) %>%
+        summarise(date = Date,
+                  close = cumprod((Value/100)*dataa$benchmark+1)*1000) %>%
+        suppressMessages()
+    }else{
+      valores <- get_series(c(CDI = 12), start_date = dataa$date) %>%
+        arrange(date) %>%
+        summarise(date,close = cumprod((CDI/100)*dataa$benchmark+1)*1000)
+    }
     valores <- left_join(tota,valores,"date")
     for(i in 2:nrow(valores)){
       if(is.na(valores[i,2])){
@@ -349,9 +354,9 @@ carteira <- function(data.framee){
                   aporte,compras,vendas,valor_tot,preco_med,lucro,lucro_realizado,
                   retorno,retorno_tot))
 }
-carteira_tot <- function(lista){
+carteira_tot <- function(lista, Quandl_api_key = NA){
   options(warn = -1)
-  cart <- lapply(lista,carteira)
+  cart <- lapply(lista,carteira,Quandl_api_key)
   tot <- bind_rows(cart)
   total <- tot %>%
     group_by(date) %>%
