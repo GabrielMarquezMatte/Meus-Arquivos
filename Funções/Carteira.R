@@ -70,8 +70,10 @@ carteira <- function(data.framee,Quandl_api_key = NA,
   }
   if(!is.null(data.framee$symbol[1])){
     message(glue("Consolidando {data.framee$symbol[1]}"))
-  }else{
+  }else if(!is.null(data.framee$cnpj[1])){
     message(glue("Consolidando {data.framee$cnpj[1]}"))
+  }else{
+    message(glue("Consolidando {data.framee$option[1]}"))
   }
   val <- get_precos(data.framee,Quandl_api_key,valores_atual,be.quiet = be.quiet)
   val <- val %>%
