@@ -1,3 +1,4 @@
+source("Meus Arquivos/Códigos/Coleta de dados.R")
 completar <- function(x){
   xx <- numeric(length(x))
   xx[1] <- na.omit(x)[1]
@@ -10,81 +11,6 @@ completar <- function(x){
     }
   }
   return(xx)
-}
-get_atual <- function(x){
-  pacotes <- c("tidyverse","quantmod")
-  for(i in pacotes){
-    suppressPackageStartupMessages(require(i,character.only = T))
-  }
-  funcao <- function(x){
-    preco <- getQuote(x)
-    tabela <- data.frame(symbol = x,
-                         date = Sys.Date(),
-                         open = preco$Open,
-                         high = preco$High,
-                         low = preco$Low,
-                         close = preco$Last,
-                         volume = preco$Volume,
-                         adjusted = preco$Last)
-    return(tabela)
-  }
-  data <- lapply(x,funcao) %>% bind_rows
-  return(data)
-}
-informacoes_fundo <- function(cnpj){
-  pacotes <- c("httr","rvest","tidyverse")
-  for(i in pacotes){
-    suppressPackageStartupMessages(require(i,character.only = T))
-  }
-  cnpj1 <- gsub("\\D","",cnpj)
-  url <- paste0("https://www.okanebox.com.br/api/fundoinvestimento/info/",cnpj1,"/")
-  g <- GET(url)
-  cont <- content(g)[[1]]
-  return(cont)
-}
-valor_cota <- function(cnpj, data_inicio = Sys.Date()-365, data_fim = Sys.Date()){
-  pacotes <- c("httr","rvest","tidyverse","lubridate")
-  for(i in pacotes){
-    suppressPackageStartupMessages(require(i,character.only = T))
-  }
-  vl_cota <- function(cnpj,data_inicio = Sys.Date()-365, data_fim = Sys.Date()){
-    cnpj1 <- gsub("\\D","",cnpj,fixed = F)
-    url <- paste0("https://www.okanebox.com.br/api/fundoinvestimento/hist/",cnpj1)
-    data_inicio <- as.Date(data_inicio)
-    data_inicio <- format(data_inicio,"%Y%m%d")
-    data_fim <- as.Date(data_fim)
-    data_fim <- format(data_fim,"%Y%m%d")
-    url <- paste0(url,"/",data_inicio,"/",data_fim)
-    g <- GET(url)
-    cont <- content(g)
-    cota <- matrix(nrow = length(cont), ncol = 6)
-    for(i in 1:nrow(cota)){
-      cota[i,1] <- as.Date(cont[[i]]$DT_COMPTC)
-      cota[i,2] <- as.numeric(cont[[i]]$VL_TOTAL)
-      cota[i,3] <- as.numeric(cont[[i]]$VL_QUOTA)
-      cota[i,4] <- as.numeric(cont[[i]]$VL_PATRIM_LIQ)
-      cota[i,5] <- as.numeric(cont[[i]]$CAPTC_DIA)
-      cota[i,6] <- as.numeric(cont[[i]]$RESG_DIA)
-    }
-    cota <- apply(cota,2,as.numeric)
-    nome <- informacoes_fundo(cnpj)$DENOM_SOCIAL
-    cota <- data.frame(cnpj = cnpj,
-                       nome = nome,
-                       date = as_date(cota[,1]),
-                       vl_total = as.numeric(cota[,2]),
-                       vl_quota = as.numeric(cota[,3]),
-                       vl_patrim_liq = as.numeric(cota[,4]),
-                       captc_dia = as.numeric(cota[,5]),
-                       resg_dia = as.numeric(cota[,6]))
-  }
-  cota <- vl_cota(cnpj[1], data_inicio, data_fim)
-  if(length(cnpj) > 1){
-    for(i in 2:length(cnpj)){
-      cota1 <- vl_cota(cnpj[i], data_inicio, data_fim)
-      cota <- rbind(cota,cota1)
-    }
-  }
-  return(cota)
 }
 retorno_carteira <- function(valor,aporte,compras){
   retorno <- numeric(length(valor))
@@ -128,7 +54,8 @@ preco_medio <- function(n_acoes,price){
   }
   pm
 }
-carteira <- function(data.framee,Quandl_api_key = NA){
+carteira <- function(data.framee,Quandl_api_key = NA,
+                     valores_atual = T, be.quiet = T){
   #data.frame(symbol,date,price,n_acoes,moeda = NA ou moeda de preferência)
   options(warn = -1)
   pacotes <- c("tidyverse","BatchGetSymbols","GetTDData",
@@ -141,160 +68,12 @@ carteira <- function(data.framee,Quandl_api_key = NA){
   for(i in pacotes){
     suppressPackageStartupMessages(require(i,character.only = T))
   }
-  #Inputando parâmetros faltantes
-  if(is.null(data.framee$moeda)){
-    data.framee$moeda <- NA
-  }
-  if(is.null(data.framee$vencimento)){
-    data.framee$vencimento <- NA
-  }
-  if(is.null(data.framee$benchmark)){
-    data.framee$benchmark <- 1
-  }
-  if(is.null(data.framee$symbol)){
-    data.framee$symbol <- NA
-  }
-  if(is.null(data.framee$cnpj)){
-    data.framee$cnpj <- NA
-  }
-  data.framee$vencimento <- as.Date(data.framee$vencimento)
-  data.framee$date <- as.Date(data.framee$date)
-  data.framee$benchmark <- as.numeric(data.framee$benchmark)
-  dataa <- data.framee[1,]
-  tota <- data.frame(date = seq(dataa$date,
-                                Sys.Date(),"1 day"))
-  if(is.na(dataa$symbol)){
-    message(glue::glue("Consolidando {dataa$cnpj}"))
+  if(!is.null(data.framee$symbol[1])){
+    message(glue("Consolidando {data.framee$symbol[1]}"))
   }else{
-    message(glue::glue("Consolidando {dataa$symbol}"))
+    message(glue("Consolidando {data.framee$cnpj[1]}"))
   }
-  #Coletando preços#
-  #Ações e criptos
-  if(!(dataa$symbol %in% c("NTN-B","NTN-B Principal","LTN","LFT","NTN-F","CDI")) &
-     !is.na(dataa$symbol)){
-    valores <- BatchGetSymbols(dplyr::first(data.framee$symbol), 
-                               first.date = dplyr::first(data.framee$date)-5,
-                               bench.ticker = dataa$symbol,be.quiet = T,
-                               cache.folder = glue("{getwd()}/BGS_Cache"))$df.tickers %>%
-      select(symbol = ticker,
-             date = ref.date,
-             open = price.open,
-             high = price.high,
-             low = price.low,
-             close = price.close,
-             volume,adjusted = price.adjusted) %>%
-      suppressMessages()
-    atual <- get_atual(dataa$symbol)
-    if(atual$date == valores$date[nrow(valores)]){
-      atual <- NULL
-    }
-    valores <- rbind(valores,atual)
-    valores <- left_join(tota,valores,"date") %>%
-      mutate(symbol = dataa$symbol)
-    for(j in 2:ncol(valores)){
-      valores[,j] <- completar(valores[,j])
-    }
-    dividendos <- tq_get(dplyr::first(data.framee$symbol), 
-                         from = dplyr::first(data.framee$date)-5,
-                         get = "dividends")
-    #Ativos estrangeiros
-    if(!is.na(dataa$moeda)){
-      moeda <- BatchGetSymbols(dplyr::first(data.framee$moeda),
-                               first.date = dplyr::first(data.framee$date)-5,
-                               bench.ticker = dataa$moeda,be.quiet = T,
-                               cache.folder = glue("{getwd()}/BGS_Cache"))$df.tickers %>%
-        select(symbol = ticker,
-               date = ref.date,
-               open = price.open,
-               high = price.high,
-               low = price.low,
-               close = price.close,
-               volume,adjusted = price.adjusted) %>%
-        suppressMessages()
-      moeda_atual <- get_atual(dataa$moeda)
-      moeda <- rbind(moeda,moeda_atual)
-      moeda <- moeda %>%
-        select(date,close)
-      moeda <- left_join(tota,moeda,"date") %>%
-        mutate(close = completar(close))
-      moeda <- moeda[!duplicated(moeda$date),]
-    }else{ #Ativos nacionais
-      moeda <- data.frame(date = valores$date,
-                          moeda = 1)
-    }
-    colnames(moeda) <- c("date","moeda")
-    if(is.null(dim(dividendos))| any(dim(dividendos) == 0)){
-      dividendos <- data.frame(symbol = data.framee$symbol,
-                               date = data.framee$date,
-                               value = 0,
-                               price = data.framee$price,
-                               n_acoes = data.framee$n_acoes)
-      val <- left_join(valores,dividendos,c("symbol","date"))
-      val <- left_join(val,moeda,c("date"))
-    }else{
-      val <- valores %>%
-        left_join(data.framee %>%
-                    select(symbol,date,price,n_acoes),by = c("symbol","date")) %>%
-        left_join(dividendos, by = c("symbol","date")) %>%
-        left_join(moeda,"date")
-    }
-  }else if(dataa$symbol %in% c("NTN-B","NTN-B Principal","LTN","LFT","NTN-F")){
-    download.TD.data(asset.codes = dataa$symbol) #Tesouro Direto
-    valores <- read.TD.files(asset.codes = dataa$symbol,
-                             maturity = format(dataa$vencimento,"%d%m%y")) %>%
-      filter(ref.date >= dataa$date-2) %>%
-      select(ref.date,price.bid)
-    colnames(valores) <- c("date","close")
-    valores <- left_join(tota,valores,"date")
-    valores[,2] <- completar(valores[,2])
-    val <- valores %>%
-      left_join(data.framee %>%
-                  select(symbol, date, price, n_acoes,moeda), "date") %>%
-      mutate(value = 0,
-             moeda = 1,
-             symbol = paste(dataa$symbol,dataa$vencimento))
-  }
-  try(if(dataa$symbol == "CDI"){ #Renda Fixa Pós-fixada
-    if(is.character(Quandl_api_key)){
-      Quandl.api_key(Quandl_api_key)
-      valores <- Quandl("BCB/12", start_date = dataa$date) %>%
-        arrange(Date) %>%
-        summarise(date = Date,
-                  close = cumprod((Value/100)*dataa$benchmark+1)*1000) %>%
-        suppressMessages()
-    }else{
-      valores <- get_series(c(CDI = 12), start_date = dataa$date) %>%
-        arrange(date) %>%
-        summarise(date,close = cumprod((CDI/100)*dataa$benchmark+1)*1000)
-    }
-    valores <- left_join(tota,valores,"date")
-    for(i in 2:nrow(valores)){
-      if(is.na(valores[i,2])){
-        valores[i,2] <- valores[i-1,2]
-      }
-    }
-    val <- valores %>%
-      left_join(data.framee %>%
-                  select(symbol, date, price, n_acoes,moeda), "date") %>%
-      mutate(value = 0,
-             moeda = 1,
-             symbol = dataa$symbol)
-  }, silent = T)
-  if(!is.na(dataa$cnpj)){ #Fundos de investimentos brasileiros
-    valores <- valor_cota(dataa$cnpj, dataa$date) %>%
-      select(date,cnpj,vl_quota) %>%
-      rename(close = vl_quota)
-    valores <- left_join(tota,valores,"date")
-    for(j in 2:ncol(valores)){
-      valores[,j] <- completar(valores[,j])
-    }
-    val <- valores %>%
-      left_join(data.framee %>%
-                  select(cnpj, date, price, n_acoes, moeda),c("date","cnpj")) %>%
-      mutate(value = 0,
-             moeda = 1) %>%
-      rename(symbol = cnpj)
-  }
+  val <- get_precos(data.framee,Quandl_api_key,valores_atual,be.quiet = be.quiet)
   val <- val %>%
     mutate(value = zoo::na.fill(value,0) %>% as.numeric*moeda,
            n_acoes = zoo::na.fill(n_acoes,0) %>% as.numeric,
@@ -354,9 +133,11 @@ carteira <- function(data.framee,Quandl_api_key = NA){
                   aporte,compras,vendas,valor_tot,preco_med,lucro,lucro_realizado,
                   retorno,retorno_tot))
 }
-carteira_tot <- function(lista, Quandl_api_key = NA){
+carteira_tot <- function(lista, Quandl_api_key = NA, valores_atual = T,be.quiet = T){
   options(warn = -1)
-  cart <- lapply(lista,carteira,Quandl_api_key)
+  start <- Sys.time()
+  cart <- lapply(lista,carteira,Quandl_api_key, 
+                 valores_atual = valores_atual,be.quiet = be.quiet)
   tot <- bind_rows(cart)
   total <- tot %>%
     group_by(date) %>%
@@ -410,7 +191,11 @@ carteira_tot <- function(lista, Quandl_api_key = NA){
            cotas = valor_tot/(retorno_tot+1))
   pesos <- pesos %>%
     filter(pesos != 0)
+  end <- Sys.time()
+  dife <- (end-start)/length(lista)
+  print(glue("Tempo medio de consolidacao:{round(dife,5)} segundos"))
   listaa <- list(retornos = total,
-                 pesos = pesos)
+                 pesos = pesos,
+                 tempo = dife)
   return(listaa)
 }
