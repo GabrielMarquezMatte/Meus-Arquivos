@@ -1,4 +1,4 @@
-source("Meus Arquivos/Códigos/Coleta de dados.R")
+source("https://raw.githubusercontent.com/GabrielMarquezMatte/Meus-Arquivos/master/Fun%C3%A7%C3%B5es/Coleta%20de%20dados.R",encoding = "UTF-8")
 completar <- function(x){
   xx <- numeric(length(x))
   xx[1] <- na.omit(x)[1]
