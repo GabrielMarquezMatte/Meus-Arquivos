@@ -57,7 +57,125 @@ get_opcoes <- function(symbol,from = Sys.Date()-30,to = Sys.Date()){
   }
   lapply(url,func) %>% bind_rows %>%
     mutate(symbol = symbol) %>%
-    select(symbol,date,open,high,low,close,volume,adjusted,daily.return)
+    select(symbol,date,open,high,low,close,volume,adjusted,daily.return) %>%
+    arrange(date)
+}
+my_options <- function(ticker,first.date = Sys.Date()-365,
+                       last.date = Sys.Date(),do.cache = T, be.quiet = F,
+                       cache.folder = "Options"){
+  first.date <- as.Date(first.date)
+  last.date <- as.Date(last.date)
+  if(do.cache){
+    my.cache.files <- list.files(cache.folder, full.names = TRUE)
+    if(length(my.cache.files) > 0){
+      l.out <- stringr::str_split(tools::file_path_sans_ext(basename(my.cache.files)), 
+                                  "_")
+      df.cache.files <- dplyr::tibble(f.name = my.cache.files, 
+                                      ticker = sapply(l.out, function(x) x[1]),
+                                      first.date = as.Date(sapply(l.out,function(x) x[2])),
+                                      last.date = as.Date(sapply(l.out,function(x) x[3])))
+    }else{
+      df.cache.files <- dplyr::tibble(f.name = "", ticker = "",
+                                      first.date = first.date,
+                                      last.date = last.date)
+    }
+    fixed.ticker <- fix.ticker.name(ticker)
+    temp.cache <- dplyr::filter(df.cache.files, ticker == 
+                                  fixed.ticker)
+    if(nrow(temp.cache) > 1){
+      stop(paste0("Found more than one file in cache for ", 
+                  ticker, "\nYou must manually remove one of \n\n", 
+                  paste0(temp.cache$f.name, collapse = "\n")))
+    }
+    if(nrow(temp.cache) != 0){
+      df.cache <- data.frame()
+      flag.dates <- TRUE
+      if(!be.quiet){
+        message(ticker," | Found cache file", appendLF = FALSE)
+      }
+      df.cache <- readRDS(temp.cache$f.name)
+      max.diff.dates <- 0
+      flag.dates <- ((first.date - temp.cache$first.date) < 
+                       -max.diff.dates) | ((last.date - temp.cache$last.date) > 
+                                             max.diff.dates)
+      df.out <- data.frame()
+      if(flag.dates){
+        if(!be.quiet){
+          message(" | Need new data", appendLF = FALSE)
+        }
+        flag.date.bef <- ((first.date - temp.cache$first.date) < 
+                            -max.diff.dates)
+        df.out.bef <- data.frame()
+        if(flag.date.bef){
+          df.out.bef <- get_opcoes(ticker,first.date, temp.cache$first.date)
+        }
+        flag.date.aft <- ((last.date - temp.cache$last.date) > 
+                            max.diff.dates)
+        df.out.aft <- data.frame()
+        if(flag.date.aft){
+          df.out.aft <- get_opcoes(ticker,temp.cache$last.date, last.date)
+        }
+        df.out <- rbind(df.out.bef, df.out.aft)
+      }
+      df.out <- unique(rbind(df.cache, df.out))
+      if(nrow(df.out) > 0){
+        idx <- order(df.out$symbol, df.out$date)
+        df.out <- df.out[idx, ]
+      }
+      file.remove(temp.cache$f.name)
+      my.f.out <- paste0(fixed.ticker, "_", 
+                         min(c(temp.cache$first.date, first.date)), "_", 
+                         max(c(temp.cache$last.date, last.date)), ".rds")
+      saveRDS(df.out, file = file.path(cache.folder, my.f.out))
+      date <- NULL
+      df.out <- dplyr::filter(df.out, date >= first.date, 
+                              date <= last.date)
+    }else{
+      if(!be.quiet){
+        message(" | Not Cached", appendLF = FALSE)
+      }
+      my.f.out <- paste0(fixed.ticker, "_", 
+                         first.date, "_", last.date, ".rds")
+      df.out <- get_opcoes(ticker, first.date, 
+                           last.date)
+      if(nrow(df.out) >= 1){
+        if(!be.quiet){
+          message(" | Saving cache", appendLF = FALSE)
+        }
+        if(dir.exists(cache.folder)){
+          saveRDS(df.out, file = file.path(cache.folder, 
+                                           my.f.out))
+        }else{
+          dir.create(cache.folder)
+          saveRDS(df.out, file = file.path(cache.folder, 
+                                           my.f.out))
+        }
+      }
+    }
+  }else{
+    df.out <- get_opcoes(ticker, first.date, last.date)
+  }
+  if(nrow(df.out) == 0){
+    download.status = "NOT OK"
+    total.obs = 0
+    perc.benchmark.dates = 0
+    threshold.decision = "OUT"
+    df.out <- data.frame()
+    if(!be.quiet){
+      message(" - Error in download..", appendLF = FALSE)
+    }
+  }else{
+    morale.boost <- c(rep(c("OK!", "Got it!", "Nice!", "Good stuff!", 
+                            "Looking good!", "Good job!", "Well done!", "Feels good!", 
+                            "You got it!", "Youre doing good!"), 10), "Boa!", 
+                      "Mas bah tche, que coisa linda!", "Mais contente que cusco de cozinheira!", 
+                      "Feliz que nem lambari de sanga!", "Mais faceiro que guri de bombacha nova!")
+    df.control <- tibble::tibble(ticker = ticker,download.status = "OK",
+                                 total.obs = "100%", 
+                                 threshold.decision = "KEEP")
+    l.out <- list(df.tickers = df.out, df.control = df.control)
+    return(l.out)
+  }
 }
 get_atual <- function(x){
   pacotes <- c("tidyverse","quantmod")
@@ -293,7 +411,9 @@ my_dividends <- function(ticker, i.ticker = ticker, length.tickers = length(tick
     return(l.out)
   }
 }
-get_precos <- function(data.framee,Quandl_api_key,valores_atual,be.quiet = T){
+get_precos <- function(data.framee,Quandl_api_key,
+                       valores_atual,be.quiet = T,
+                       do_cache = T){
   if(is.null(data.framee$moeda)){
     data.framee$moeda <- NA
   }
@@ -312,19 +432,29 @@ get_precos <- function(data.framee,Quandl_api_key,valores_atual,be.quiet = T){
   if(is.null(data.framee$option)){
     data.framee$option <- NA
   }
-  data.framee$vencimento <- as.Date(data.framee$vencimento)
-  data.framee$date <- as.Date(data.framee$date)
-  data.framee$benchmark <- as.numeric(data.framee$benchmark)
-  dataa <- data.framee %>%
-    arrange(as.Date(date)) %>%
-    .[1,]
+  data.framee <- data.framee %>%
+    mutate(vencimento = as.Date(vencimento),
+           date = as.Date(date),
+           benchmark = as.numeric(benchmark),
+           n_acoes = as.numeric(n_acoes)) %>%
+    arrange(date)
+  dataa <- data.framee[1,]
   valores_atual <- T
+  data_f <- Sys.Date()
+  if(sum(data.framee$n_acoes) == 0){
+    data_f <- tail(data.framee$date,1)
+    valores_atual <- F
+  }
   tota <- data.frame(date = seq(dataa$date,
-                                Sys.Date(),"1 day"))
+                                data_f,"1 day"))
   if(!(dataa$symbol %in% c("NTN-B","NTN-B Principal","LTN","LFT","NTN-F","CDI")) &
      !is.na(dataa$symbol)){
+    if(grepl("USD",dataa$symbol)){
+      if(data_f == Sys.Date())data_f <- data_f-1
+    }
     valores <- BatchGetSymbols(dplyr::first(data.framee$symbol), 
                                first.date = dplyr::first(data.framee$date)-5,
+                               last.date = data_f,do.cache = do_cache,
                                bench.ticker = dataa$symbol,be.quiet = be.quiet,
                                cache.folder = glue("{getwd()}/BGS_Cache"))$df.tickers %>%
       select(symbol = ticker,
@@ -351,12 +481,15 @@ get_precos <- function(data.framee,Quandl_api_key,valores_atual,be.quiet = T){
       valores[,j] <- completar(valores[,j])
     }
     dividendos <- my_dividends(dataa$symbol,first.date = dataa$date-5,
+                               last.date = data_f,do.cache = do_cache,
                                cache.folder = glue("{getwd()}/BGS_Dividends"),
                                be.quiet = be.quiet)
     #Ativos estrangeiros
     if(!is.na(dataa$moeda)){
+      if(data_f == Sys.Date())data_f <- data_f-1
       moeda <- BatchGetSymbols(dplyr::first(data.framee$moeda),
                                first.date = dplyr::first(data.framee$date)-5,
+                               last.date = data_f,do.cache = do_cache,
                                bench.ticker = dataa$moeda,be.quiet = be.quiet,
                                cache.folder = glue("{getwd()}/BGS_Cache"))$df.tickers %>%
         select(symbol = ticker,
@@ -399,7 +532,9 @@ get_precos <- function(data.framee,Quandl_api_key,valores_atual,be.quiet = T){
         left_join(moeda,"date")
     }
   }else if(dataa$symbol %in% c("NTN-B","NTN-B Principal","LTN","LFT","NTN-F")){
-    download.TD.data(asset.codes = dataa$symbol) #Tesouro Direto
+    ano_i <- lubridate::year(dataa$date)
+    dif_anos <- (year(Sys.Date())-ano_i)+1
+    download.TD.data(asset.codes = dataa$symbol,n.dl = dif_anos) #Tesouro Direto
     valores <- read.TD.files(asset.codes = dataa$symbol,
                              maturity = format(dataa$vencimento,"%d%m%y")) %>%
       filter(ref.date >= dataa$date-2) %>%
@@ -417,13 +552,13 @@ get_precos <- function(data.framee,Quandl_api_key,valores_atual,be.quiet = T){
   try(if(dataa$symbol == "CDI"){ #Renda Fixa Pós-fixada
     if(is.character(Quandl_api_key)){
       Quandl.api_key(Quandl_api_key)
-      valores <- Quandl("BCB/12", start_date = dataa$date) %>%
+      valores <- Quandl("BCB/12", start_date = dataa$date,end_date = data_f) %>%
         arrange(Date) %>%
         summarise(date = Date,
                   close = cumprod((Value/100)*dataa$benchmark+1)*1000) %>%
         suppressMessages()
     }else{
-      valores <- get_series(c(CDI = 12), start_date = dataa$date) %>%
+      valores <- get_series(c(CDI = 12),start_date = dataa$date,end_date = data_f) %>%
         arrange(date) %>%
         summarise(date,close = cumprod((CDI/100)*dataa$benchmark+1)*1000)
     }
@@ -441,7 +576,7 @@ get_precos <- function(data.framee,Quandl_api_key,valores_atual,be.quiet = T){
              symbol = dataa$symbol)
   }, silent = T)
   if(!is.na(dataa$cnpj)){ #Fundos de investimentos brasileiros
-    valores <- valor_cota(dataa$cnpj, dataa$date) %>%
+    valores <- valor_cota(dataa$cnpj,data_inicio = dataa$date,data_fim = data_f) %>%
       select(date,cnpj,vl_quota) %>%
       rename(close = vl_quota)
     valores <- left_join(tota,valores,"date")
@@ -456,10 +591,10 @@ get_precos <- function(data.framee,Quandl_api_key,valores_atual,be.quiet = T){
       rename(symbol = cnpj)
   }
   if(!is.na(dataa$option)){
-    data_f <- ifelse(tail(cumsum(data.framee$n_acoes),1) == 0,
-                     tail(data.framee$date,1),Sys.Date()) %>%
-      as.Date()
-    valores <- get_opcoes(dataa$option, from = dataa$date, to = data_f) %>%
+    valores <- my_options(dataa$option, 
+                          first.date = dataa$date, 
+                          last.date = data_f, 
+                          be.quiet = be.quiet,do.cache = do_cache)$df.tickers %>%
       select(date,symbol,close)
     valores <- left_join(tota,valores,"date")
     for(i in 2:ncol(valores)){
