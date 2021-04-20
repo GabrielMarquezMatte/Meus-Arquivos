@@ -1,40 +1,48 @@
 source("https://raw.githubusercontent.com/GabrielMarquezMatte/Meus-Arquivos/master/Fun%C3%A7%C3%B5es/Coleta%20de%20dados.R",encoding = "UTF-8")
-completar <- function(x){
-  xx <- numeric(length(x))
-  xx[1] <- na.omit(x)[1]
-  xx[-1] <- x[-1]
-  if(length(x) > 1){
-    for(i in 2:length(x)){
-      if(is.na(xx[i])){
-        xx[i] <- xx[i-1]
-      }
+apply.roll <- function(x,w = 100,FUN = sum){
+  n <- numeric(length(x))
+  for(i in 1:length(x)){
+    if(i >= (w+1)){
+      n[i] <- FUN(x[(i-w):i])
+    }else{
+      n[i] <- FUN(x[1:i])
     }
   }
-  return(xx)
+  return(n)
 }
-retorno_carteira <- function(valor,aporte,compras){
+retorno_carteira <- function(valor,aporte,
+                             compras,dividendos = 0,
+                             ret_dividendos = T){
+  if(length(dividendos) == 1)dividendos <- rep(dividendos,length(valor))
+  if(length(aporte) == 1)aporte <- rep(aporte,length(valor))
+  if(length(compras) == 1)compras <- rep(compras,length(valor))
+  dividendos[is.na(dividendos)] <- 0
+  if(!ret_dividendos)dividendos <- rep(0,length(valor))
   retorno <- numeric(length(valor))
   if(length(valor) > 1){
     for(i in 2:length(retorno)){
       if(round(valor[i],100) <= 0 & aporte[i] == 0){
         retorno[i] <- 0
-      }else if(aporte[i] < 0 & round(valor[i],100) == 0 & round(valor[i-1],100) > 0){
-        retorno[i] <- (-aporte[i])/valor[i-1]-1
-      }else if(aporte[i] != 0 & round(valor[i],100) == 0&
-               round(valor[i-1],100) == 0 & compras[i] != 0){
-        retorno[i] <- -(aporte[i]/compras[i])
+      }else if(aporte[i] < 0 & round(valor[i],20) == 0 & round(valor[i-1],20) > 0){
+        retorno[i] <- (-aporte[i]+dividendos[i])/valor[i-1]-1
+      }else if(aporte[i] != 0 & round(valor[i],20) == 0&
+               round(valor[i-1],20) == 0 & compras[i] != 0){
+        retorno[i] <- -((aporte[i]-dividendos[i])/compras[i])
       }else if(aporte[i] == 0 & valor[i] > 0 & valor[i-1] < 0){
         retorno[i] <- 0
       }else{
-        retorno[i] <- (valor[i]-valor[i-1]-aporte[i])/
+        retorno[i] <- (valor[i]-valor[i-1]-aporte[i]+dividendos[i])/
           (valor[i-1]+aporte[i])
+      }
+      if(retorno[i] <= -1){
+        retorno[i] <- (aporte[i]+valor[i])/valor[i-1]
       }
     }
   }
   if(round(valor[1],100) == 0 & aporte[1] != 0 & compras[1] != 0){
     retorno[1] <- -(aporte[1]/compras[1])
   }else{
-    retorno[1] <- valor[1]/aporte[1]-1
+    retorno[1] <- (valor[1]+dividendos[1])/aporte[1]-1
   }
   return(retorno)
 }
@@ -82,16 +90,24 @@ ajustar <- function(data.frame,last_split = NA){
            price = as.numeric(price),
            date = as.Date(date)) %>%
     arrange(date)
-  if(is.na(last_split)){
-    last_split <- tail(splits$date,1)
+  if(is.na(last_split) & is.null(data$ajustado)){
+    last_split <- tail(data$date,1)
+  }else if(is.na(last_split) & !is.null(data$ajustado)){
+    last_split <- tail(data$ajustado,1)
   }
   splits <- tq_get(head(data$symbol,1),get = "splits",from = last_split)
+  if(!is.na(splits)){
+    if(tail(splits$date,1) < last_split){
+      splits <- NA
+    }
+  }
   if(is.na(splits)){
     return(data)
   }else{
     data <- data %>%
       mutate(n_acoes = ifelse(date <= last_split, n_acoes/prod(splits$value),n_acoes),
-             price = ifelse(date <= last_split, price*prod(splits$value),price))
+             price = ifelse(date <= last_split, price*prod(splits$value),price),
+             ajustado = tail(splits$date,1)+1)
     return(data)
   }
 }
@@ -114,7 +130,8 @@ clean <- function(val){
 }
 carteira <- function(data.framee,Quandl_api_key = NA,
                      valores_atual = T, be.quiet = T,
-                     do_cache = T){
+                     do_cache = T,bench = "^BVSP",
+                     ret_dividendos = T){
   #data.frame(symbol,date,price,n_acoes,moeda = NA ou moeda de preferência)
   options(warn = -1)
   pacotes <- c("tidyverse","BatchGetSymbols","GetTDData",
@@ -136,13 +153,14 @@ carteira <- function(data.framee,Quandl_api_key = NA,
   }
   val <- get_precos(data.framee,Quandl_api_key = Quandl_api_key,
                     valores_atual = valores_atual,be.quiet = be.quiet,
-                    do_cache = do_cache)
+                    do_cache = do_cache,bench = bench)
   val <- val %>%
     mutate(value = zoo::na.fill(value,0) %>% as.numeric*moeda,
            n_acoes = zoo::na.fill(n_acoes,0) %>% as.numeric,
            value = value*cumsum(n_acoes),
            close = close*moeda,
-           price = zoo::na.fill(price,0) %>% as.numeric*moeda,
+           price = zoo::na.fill(price,0) %>% as.numeric,
+           price = ifelse(is.na(price_moeda),price*moeda,price*price_moeda),
            aporte = price*n_acoes,
            aporte = zoo::na.fill(aporte,0) %>% as.numeric,
            compras = ifelse(aporte > 0, aporte, 0),
@@ -153,7 +171,7 @@ carteira <- function(data.framee,Quandl_api_key = NA,
            lucro = cumsum(n_acoes)*(close-preco_med),
            lucro_realizado = lucro_realizado(price,preco_med,
                                              n_acoes,aporte,valor_tot),
-           retorno = retorno_carteira(valor_tot,aporte,compras)) %>%
+           retorno = retorno_carteira(valor_tot,aporte,compras,value,ret_dividendos)) %>%
     select(symbol,date,close,n_acoes,dividendos = value,
            aporte,compras,vendas,valor_tot,preco_med,lucro,lucro_realizado,
            price,retorno) %>%
@@ -173,12 +191,13 @@ carteira <- function(data.framee,Quandl_api_key = NA,
 }
 carteira_tot <- function(lista, Quandl_api_key = NA, 
                          valores_atual = T,be.quiet = T,
-                         do_cache = T){
+                         do_cache = T,bench = "^BVSP",
+                         ret_dividendos = T){
   options(warn = -1)
   start <- Sys.time()
   cart <- lapply(lista,carteira,Quandl_api_key = Quandl_api_key, 
                  valores_atual = valores_atual,be.quiet = be.quiet,
-                 do_cache = do_cache)
+                 do_cache = do_cache,ret_dividendos = ret_dividendos)
   tot <- bind_rows(cart)
   total <- tot %>%
     group_by(date) %>%
@@ -190,7 +209,8 @@ carteira_tot <- function(lista, Quandl_api_key = NA,
               lucro = sum(lucro, na.rm = T),
               lucro_realizado = sum(lucro_realizado))
   total <- total %>%
-    mutate(retorno = retorno_carteira(valor_tot,aporte,compras),
+    mutate(retorno = retorno_carteira(valor_tot,aporte,
+                                      compras,dividendos,ret_dividendos),
            retorno_tot = cumprod(retorno+1)-1)
   pesos <- tot %>%
     group_by(date) %>%
@@ -217,7 +237,8 @@ carteira_tot <- function(lista, Quandl_api_key = NA,
               dividendos,
               aporte,compras,vendas,
               preco_med,close,
-              retorno = retorno_carteira(valor_tot,aporte,compras),
+              retorno = retorno_carteira(valor_tot,aporte,
+                                         compras,dividendos,ret_dividendos),
               retorno_tot = cumprod(retorno+1)-1,
               lucro, lucro_realizado,
               retorno_ativo = close/close[1]-1) %>%
@@ -233,8 +254,7 @@ carteira_tot <- function(lista, Quandl_api_key = NA,
               "date") %>%
     mutate(drawdown = (c(1,retorno_tot+1)/cummax(c(1,retorno_tot+1))-1)[-1],
            cotas = valor_tot/(retorno_tot+1))
-  pesos <- pesos %>%
-    filter(pesos != 0)
+  pesos <- pesos
   end <- Sys.time()
   dife <- difftime(end,start,units = "secs")/length(lista)
   print(glue("Tempo medio de consolidacao: {dife} segundos"))
