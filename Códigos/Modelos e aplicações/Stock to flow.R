@@ -1,10 +1,9 @@
+#Carregando os pacotes
 pacotes <- c("tidyverse","Quandl","tidyquant",
              "lubridate","BatchGetSymbols","fANCOVA")
 sapply(pacotes,require,character.only = T)
-source("Meus Arquivos/Códigos/Carteira.R",encoding = "UTF-8")
-source("Meus Arquivos/Códigos/Funções.R",encoding = "UTF-8")
-Quandl.api_key("<API>")
-total_btc <- Quandl("BCHAIN/TOTBC") %>%
+Quandl.api_key("<API>") #API Quandl
+total_btc <- Quandl("BCHAIN/TOTBC") %>% #Calculando o número de bitcoins adicionados
   arrange(Date) %>%
   rename(date = Date, bitcoins = Value) %>%
   mutate(new_btc = c(bitcoins[1],diff(bitcoins)),
@@ -21,37 +20,24 @@ total_btc <- Quandl("BCHAIN/TOTBC") %>%
   mutate(year = NULL,
          month = NULL,
          week = NULL)
-price_month = Quandl("BCHAIN/MKPRU") %>%
+price_month = Quandl("BCHAIN/MKPRU") %>% #Coletando o preço do Bitcoin
   arrange(Date) %>%
   summarise(date = Date,
             price = Value)
-dolar <- BatchGetSymbols("USDBRL=X", first.date = head(price_month$date,1)-10,
-                         cache.folder = "BGS_Cache",
-                         bench.ticker = "USDBRL=X",
-                         do.cache = F)$df.tickers %>%
-  select(date = ref.date,close = price.close)
-total <- data.frame(date = seq(head(dolar$date,1),tail(dolar$date,1),"1 day"))
-total <- left_join(total,dolar,"date")
-total <- total %>%
-  mutate(close = completar(close))
-tot <- left_join(total_btc,price_month,"date") %>%
-  left_join(total,"date") %>%
+tot <- left_join(total_btc,price_month,"date") %>% #Juntando os data.frames
   filter(price != 0)
 linhas <- 1:round(nrow(tot)/1.5)
 linhas1 <- 1:nrow(tot)
 linhas1 <- linhas1[!(linhas1 %in% linhas)]
-reg <- lm(log(price) ~ log(sf), data = tot,subset = linhas)
+reg <- lm(log(price) ~ log(sf), data = tot,subset = linhas) #Modelo S2F
 pred <- predict(reg,tot)
 estimate <- pred
 tot <- tot %>%
-  mutate(close = 1,
-         estimate = exp(reg$coefficients[1])*sf^reg$coefficients[2]*close,
-         price = price*close,
-         close = NULL,
+  mutate(estimate = exp(reg$coefficients[1])*sf^reg$coefficients[2],
          erro = estimate/price-1)
 loess_price <- loess.as(tot$date,tot$estimate)
 span <- loess_price$pars$span
-ggplot(tot %>%
+ggplot(tot %>% #Plotando os valores
          filter(date >= "2010-01-01" &
                   date <= Sys.Date()), aes(x = date))+
   geom_line(aes(y = price, col = "Price"))+
