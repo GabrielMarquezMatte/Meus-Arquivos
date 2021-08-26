@@ -513,66 +513,6 @@ equal_risk_cont <- function(ret,cov,p_ret = NA,rf = NA,
        fun1,ret = ret,cov = cov,
        min_w = min_w,max_w = max_w,expected_contr = expected_contr)
 }
-garch_weights <- function(cova,returns,quantias,min_return = NA,
-                          max_risk = NA,tx_livre = 0,short = T,
-                          target_vol = T){
-  data <- data.frame(min_return,max_risk,tx_livre,target_vol,
-                     short)
-  min_return <- data$min_return
-  max_risk <- data$max_risk
-  tx_livre <- data$tx_livre
-  target_vol <- data$target_vol
-  short <- data$short
-  f <- function(quantias,cova,tx_livre,short,max_risk,
-                min_return,target_vol,control){
-    medias <- quantias
-    covari <- cova
-    otimo <- sharpe_optim(medias,covari,tx_livre, short = short)[[1]]
-    if(otimo$Sd >= max_risk & is.numeric(max_risk)){
-      otimo <- port_min_risk(quantias,covari,short = short)
-      if(max_risk >= otimo$Sd & target_vol){
-        otimo <- port_vol_target(medias,covari,max_risk,short)[[1]]
-      }
-    }
-    if(otimo$Return < min_return & is.numeric(min_return)){
-      otimo <- portfront(quantias,covari,min_re,short = short)[[1]]
-    }
-    pesos <- otimo$Weights
-    names(pesos) <- names(quantias)
-    sds <- otimo$Sd
-    rets <- otimo$Return
-    lista <- list(pesos = pesos,
-                  sds = sds,
-                  rets = rets)
-    return(lista)
-  }
-  lista_cova <- replicate(dim(cova)[3],list())
-  r <- replicate(dim(cova)[3],list())
-  for(i in 1:length(lista_cova)){
-    lista_cova[[i]] <- cova[,,i]
-    r[[i]] <- returns[i,]
-  }
-  a <- pmap(list(cova = lista_cova,
-                 tx_livre = tx_livre,
-                 max_risk = max_risk,
-                 min_return = min_return,
-                 short = short,
-                 target_vol = target_vol),
-            f,quantias = quantias,control = control)
-  pesos <- lapply(a,function(a)a$pesos)
-  soma <- pmap(list(p = pesos,
-                    r = r),
-               function(p,r)sum(p*r)) %>%
-    unlist
-  pesos <- bind_rows(pesos)
-  sd <- sapply(a,function(a)a$sds)
-  expected <- sapply(a,function(a)a$rets)
-  lista <- list(Weights = pesos,
-                Return = soma,
-                Sd = sd,
-                Expected_ret = expected)
-  return(lista)
-}
 portfolios <- function(ret,cov,returns,delta = 5,p_ret = 0.2,
                        rf = NA,use_rf = T,short = T,min_w = 0,max_w = 1,
                        lambda = 0.3,optimizer = c("sharpe","utility","min vol",
