@@ -1,19 +1,19 @@
 source("Meus Arquivos/Códigos/Fixed Income models.R")
-library(tidyverse)
-library(GetTDData)
-library(bizdays)
-library(glue)
-vencimento <- "2022-01-01" %>%
+pacotes <- c("tidyverse","GetTDData","bizdays","glue")
+sapply(pacotes,require,character.only = T)
+vencimento <- "2021-01-01" %>% #Vencimento do título
   as.Date()
 vencimento1 <- format(vencimento,"%d%m%y")
-tb2 <- read.TD.files(asset.codes = "LTN",maturity = vencimento1)
+#download.TD.data(asset.codes = "LTN") #Baixando os valores de LTNs
+tb2 <- read.TD.files(asset.codes = "LTN",maturity = vencimento1) #
 tb1 <- tb2 %>%
   group_by(date = ref.date) %>%
   summarise(yield.bid = mean(yield.bid),
             price.bid = mean(price.bid),
             matur.date)
 tb <- tb1 %>%
-  filter(date <= max(date)-100)
+  filter(date <= max(date)-500)
+#Fazendo o fit dos modelos
 fit <- fit_cir(tb$yield.bid)
 fit_vas <- vasicek_fit(tb$yield.bid)
 parametros <- fit$coef
@@ -21,19 +21,20 @@ sigma <- parametros["sigma"]
 lambda <- parametros["lambda"]
 mu <- parametros["mu"]
 mat <- bizdays::bizdays(tail(tb$date,1),tail(tb$matur.date,1),"Brazil/ANBIMA")
-r0 <- tail(tb$yield.bid,1)
-p0 <- tail(tb$price.bid,1)
-h <- 90
-m <- mat:(mat-h)/252
+r0 <- tail(tb$yield.bid,1) #Taxa de juros inicial
+p0 <- tail(tb$price.bid,1) #Preço inicial
+h <- 90 #Horizonte de simulação
+m <- mat:(mat-h)/252 #Vetor de diferença de dias até o vencimento
 m <- m[m >= 0]
 h <- length(m)-1
-cir <- T
+cir <- T #Modelo CIR ou Vasicek
+n <- 5000 #Número de simulações
 if(cir){
   simula <- sim_cir(lambda = lambda, mu = mu,
                     sigma = sigma, h = h,
-                    n = 5000,m = m,r0 = r0)
+                    n = n,m = m,r0 = r0)
 }else{
-  simula <- sim_vasicek(r = tb$yield.bid,h = h,n = 5000)
+  simula <- sim_vasicek(r = tb$yield.bid,h = h,n = n)
 }
 prices <- apply(simula,2,function(x,m)1000/(1+x)^m,m = m[-1])
 retornos <- apply(prices,2,function(x)c(x[1]/p0-1,diff(x)/x[-length(x)]))
@@ -41,13 +42,13 @@ sds <- apply(retornos[-1,],1,sd)
 var <- apply(retornos[-1,],1,quantile,c(0.01,0.05,0.1,0.5,0.9,0.95,0.99)) %>%
   t
 acertos <- apply(retornos[-1,],1,function(x)mean(x > 0))
-prob <- prices %>% 
+prob <- prices %>% #Probabilidade de retorno positivo desde o início da simulação
   as.data.frame() %>%
   mutate(date = add.bizdays(tail(tb$date,1),1:h-1,"Brazil/ANBIMA")) %>%
   gather(key = "sim", value = price,-date) %>%
   group_by(date) %>%
   summarise(prob = mean(price >= tail(tb$price.bid,1),na.rm = T))
-quantias <- apply(simula,1,quantile,c(0.05,0.1,0.3,0.5,0.7,0.9,0.95),na.rm = T) %>% 
+quantias <- apply(simula,1,quantile,c(0.05,0.1,0.3,0.5,0.7,0.9,0.95),na.rm = T) %>% #Quartis da simulação
   t %>%
   as.data.frame() %>%
   mutate(date = add.bizdays(tail(tb$date,1),1:h-1,"Brazil/ANBIMA")) %>%
@@ -65,12 +66,6 @@ quantias <- apply(simula,1,quantile,c(0.05,0.1,0.3,0.5,0.7,0.9,0.95),na.rm = T) 
                    matur = tb$matur.date,
                    dife = bizdays::bizdays(tb$date,tb$matur.date,"Brazil/ANBIMA")) %>%
           gather(key = index,value = value, -c(date,quantile,dife,matur)))
-lucro_medio <- prices %>% 
-  as.data.frame() %>%
-  mutate(date = add.bizdays(tail(tb$date,1),1:h-1,"Brazil/ANBIMA")) %>%
-  gather(key = "sim", value = price,-date) %>%
-  group_by(date) %>%
-  summarise(lucro = mean(price - tail(tb$price.bid,1),na.rm = T))
 label <- function(x)ifelse(x > 1,
                            scales::dollar(x,prefix = "R$",
                                                  big.mark = ".",decimal.mark = ","),
@@ -89,6 +84,7 @@ ggplot(prob[-1,], aes(x = date,y  = prob))+
   scale_y_continuous(labels = scales::percent,n.breaks = 13)+
   labs(x = "", y = "", 
        title = glue("Probabilidade de retorno positivo LTN {vencimento}"))
+#Comparando a simulação com os dados reais
 if(tail(tb$date,1) < tail(tb1$date,1)){
   real <- rbind(tb1 %>%
                   dplyr::select(date,yield = yield.bid,price = price.bid) %>%
@@ -108,4 +104,3 @@ if(tail(tb$date,1) < tail(tb1$date,1)){
          caption = "Fonte:Tesouro Nacional \n Elaboração:Gabriel Matte")+
     scale_y_continuous(labels = label, n.breaks = 13)
 }
-
