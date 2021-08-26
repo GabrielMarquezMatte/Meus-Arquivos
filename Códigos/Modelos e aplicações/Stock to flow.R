@@ -2,7 +2,7 @@
 pacotes <- c("tidyverse","Quandl","tidyquant",
              "lubridate","fANCOVA")
 sapply(pacotes,require,character.only = T)
-Quandl.api_key("sPcpUeyLAs8vUHiAZpdc") #API Quandl
+Quandl.api_key("<API>") #API Quandl
 total_btc <- Quandl("BCHAIN/TOTBC") %>% #Calculando o número de bitcoins adicionados
   arrange(Date) %>%
   rename(date = Date, bitcoins = Value) %>%
