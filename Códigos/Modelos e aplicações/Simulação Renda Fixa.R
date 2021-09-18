@@ -27,7 +27,7 @@ h <- 90 #Horizonte de simulação
 m <- mat:(mat-h)/252 #Vetor de diferença de dias até o vencimento
 m <- m[m >= 0]
 h <- length(m)-1
-cir <- T #Modelo CIR ou Vasicek
+cir <- F #Modelo CIR ou Vasicek
 n <- 5000 #Número de simulações
 if(cir){
   simula <- sim_cir(lambda = lambda, mu = mu,
@@ -76,14 +76,16 @@ ggplot(quantias %>%
        aes(x = date, y = value, col = quantile))+
   geom_line(size = 1)+
   facet_wrap(~index,nrow = 2, scales = "free")+
-  labs(x = "", y = "", title = glue("LTN {vencimento}"))+
-  scale_color_manual("Quartil", values = c(1:length(fatores)),breaks = fatores)+
+  labs(x = "", y = "", title = glue("LTN {vencimento}"),
+       subtitle = ifelse(cir,"Modelo CIR","Modelo Vasicek"))+
+  scale_color_manual("Percentil", values = c(1:length(fatores)),breaks = fatores)+
   scale_y_continuous(labels = label, n.breaks = 10)
 ggplot(prob[-1,], aes(x = date,y  = prob))+
   geom_line()+
   scale_y_continuous(labels = scales::percent,n.breaks = 13)+
   labs(x = "", y = "", 
-       title = glue("Probabilidade de retorno positivo LTN {vencimento}"))
+       title = glue("Probabilidade de retorno positivo LTN {vencimento}"),
+       subtitle = ifelse(cir,"Modelo CIR","Modelo Vasicek"))
 #Comparando a simulação com os dados reais
 if(tail(tb$date,1) < tail(tb1$date,1)){
   real <- rbind(tb1 %>%
@@ -98,9 +100,10 @@ if(tail(tb$date,1) < tail(tb1$date,1)){
                   index = gsub("yield","Juros",index)), aes(x = date, y = value, col = quantile))+
     geom_line()+
     facet_wrap(~index,nrow = 2, scales = "free")+
-    scale_color_manual("Quartis simulados",
+    scale_color_manual("Percentis simulados",
                        values = 1:length(fatores1),breaks = fatores1)+
     labs(x = "", y = "", title =  glue("Previsão LTN {vencimento}"),
-         caption = "Fonte:Tesouro Nacional \n Elaboração:Gabriel Matte")+
+         caption = "Fonte:Tesouro Nacional \n Elaboração:Gabriel Matte",
+         subtitle = ifelse(cir,"Modelo CIR","Modelo Vasicek"))+
     scale_y_continuous(labels = label, n.breaks = 13)
 }
