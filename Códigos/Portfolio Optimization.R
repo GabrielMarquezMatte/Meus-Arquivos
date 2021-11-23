@@ -1,11 +1,20 @@
 options(warn = -1)
-pacotes <- c("tidyverse","CVXR","quadprog","Rsolnp","GA","actuar")
-sapply(pacotes,require,character.only = T)
-rm(pacotes)
+pacotes <- c("tidyverse","CVXR","quadprog","Rsolnp","GA","quadprogXT")
+a <- sapply(pacotes,require,character.only = T)
+if(!all(a)){
+  nao_inst <- pacotes[!a]
+  b <- readline(paste0("Download packages: ",nao_inst,"? [Y/N]"))
+  b <- toupper(b)
+  if(b == "Y"){
+    install.packages(nao_inst)
+    sapply(pacotes,require,character.only = T)
+  }
+}
+rm(pacotes,a,b,nao_inst)
 pesos_carteira <- function(n_acoes, n_sim, short = F, p_min = -2, p_max = 2){
   pesos <- matrix(0,n_acoes,n_sim)
   if(isFALSE(short)){
-    pesos <- apply(pesos,2,rpareto, shape = 1.2, scale = 1)
+    pesos <- apply(pesos,2,rf, df1 = 1, df2 = 1)
   }else{
     pesos <- apply(pesos,2,rnorm)
     
@@ -16,28 +25,42 @@ pesos_carteira <- function(n_acoes, n_sim, short = F, p_min = -2, p_max = 2){
   return(pesos)
 }
 portfront <- function(ret,cov,p_ret,rf = NA,
-                      short = T,min_w = 0,max_w = 1){
-  fun <- function(ret,cov,p_ret,short = T,min_w,max_w,rf){
+                      short = T,min_w = 0,max_w = 1,
+                      leverage = NA){
+  fun <- function(ret,cov,p_ret,short = T,min_w,max_w,rf,leverage){
     if(is.numeric(rf)){
       nomes <- colnames(cov)
       cov <- cbind(rbind(cov,0),0)
-      cov[length(cov)] <- 1e-16
+      cov[length(cov)] <- .Machine$double.eps
       ret <- c(ret,rf)
-      colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+      if(!is.null(nomes)){
+        colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+      }else{
+        colnames(cov) <- rownames(cov) <- names(ret) <- c(rep(NA,ncol(cov)-1),"Rf")
+      }
     }
-    ret <- unlist(ret)
-    cov <- as.matrix(cov)
-    p_ret <- unlist(p_ret)
-    short <- unlist(short)
     if(short){
-      A1 <- 2*cov
-      A1 <- rbind(rbind(A1,ret),1)
-      A1 <- cbind(A1,c(ret,rep(0,2)))
-      A1 <- cbind(A1,c(rep(1,nrow(cov)), 0,0))
-      b <- c(rep(0,length(ret)),p_ret,1)
-      zb <- solve(A1) %*% b
-      w <- c(head(zb,length(ret)))
-      multi <- c(tail(zb,2))
+      if(is.numeric(leverage)){
+        dmat <- 2*cov
+        dvec <- rep(0,length(ret))
+        Amat <- cbind(1,ret)
+        bvec <- c(1,p_ret)
+        AmatPos <- cbind(rep(-1,2*ncol(cov)))
+        bvecPos <- -leverage
+        res <- solveQPXT(Dmat = dmat,dvec = dvec,Amat = Amat,bvec = bvec,
+                         AmatPosNeg = AmatPos,bvecPosNeg = bvecPos,meq = 2)
+        w <- round(head(res$solution,length(ret)),8)
+        multi <- res$Lagrangian
+      }else{
+        A1 <- 2*cov
+        A1 <- rbind(rbind(A1,ret),1)
+        A1 <- cbind(A1,c(ret,rep(0,2)))
+        A1 <- cbind(A1,c(rep(1,nrow(cov)), 0,0))
+        b <- c(rep(0,length(ret)),p_ret,1)
+        zb <- solve(A1,b)
+        w <- head(zb,length(ret))
+        multi <- tail(zb,2)
+      }
     }else{
       Dmat <- 2*cov
       dvec <- rep(0,length(ret))
@@ -56,32 +79,52 @@ portfront <- function(ret,cov,p_ret,rf = NA,
     ret_contr <- w*ret/return
     names(ret_contr) <- names(w)
     lista <- list(Return = return,Sd = dsb, Weights = w,
+                  Leverage = sum(abs(w)),
                   Var_contribution = contri,
                   Return_contribution = ret_contr,
                   Multiplicadores = multi)
     return(lista)
   }
   f <- possibly(fun,NULL)
-  pmap(list(p_ret = p_ret,short = short,rf = rf),
+  pmap(list(p_ret = p_ret,short = short,rf = rf,
+            leverage = leverage),
        f,cov = cov,ret = ret,min_w = min_w,max_w = max_w)
 }
 utility_optim <- function(ret,cov,delta = 5,rf = NA,short = T,
-                          min_w = 0,max_w = 1){
-  fun <- function(ret,cov,delta,short,min_w,max_w,rf){
+                          min_w = 0,max_w = 1,leverage = NA){
+  fun <- function(ret,cov,delta,short,min_w,max_w,rf,leverage){
     if(is.numeric(rf)){
       nomes <- colnames(cov)
       cov <- cbind(rbind(cov,0),0)
-      cov[length(cov)] <- 1e-16
+      cov[length(cov)] <- .Machine$double.eps
       ret <- c(ret,rf)
-      colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+      if(!is.null(nomes)){
+        colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+      }else{
+        colnames(cov) <- rownames(cov) <- names(ret) <- c(rep(NA,ncol(cov)-1),"Rf")
+      }
     }
     if(short){
-      cova <- cbind(rbind(cov,1),1)
-      cova[nrow(cova),ncol(cova)] <- 0
-      coefs <- c(ret/delta,1)
-      w <- solve(cova) %*% coefs
-      w1 <- round(w[-length(w)],6)
-      multiplier <- w[length(w)]
+      if(is.numeric(leverage)){
+        Dmat <- cov
+        Amat <- cbind(rep(1,ncol(cov)))
+        bvec <- 1
+        dvec <- ret/delta
+        AmatPos <- cbind(rep(-1,2*ncol(cov)))
+        bvecPos <- -leverage
+        res <- solveQPXT(Dmat = Dmat,dvec = dvec,Amat = Amat,bvec = bvec,
+                         AmatPosNeg = AmatPos,bvecPosNeg = bvecPos,meq = 1)
+        w1 <- head(res$solution,ncol(cov))
+        w1 <- round(w1,6)
+        multiplier <- res$Lagrangian
+      }else{
+        cova <- cbind(rbind(cov,1),1)
+        cova[length(cova)] <- 0
+        coefs <- c(ret/delta,1)
+        w <- solve(cova) %*% coefs
+        w1 <- round(w[-length(w)],6)
+        multiplier <- w[length(w)]
+      }
     }else{
       Dmat <- cov
       Amat <- cbind(1,diag(length(ret)),-diag(length(ret)))
@@ -103,25 +146,28 @@ utility_optim <- function(ret,cov,delta = 5,rf = NA,short = T,
     lista <- list(Return = coef,
                   Sd = sd,
                   Weights = w1,
+                  Leverage = sum(abs(w1)),
                   Var_contribution = contri,
                   Return_contribution = ret_contr,
-                  utility = utility,
+                  Utility = utility,
                   Multiplicador = multiplier)
     return(lista)
   }
   pmap(list(delta = delta,
             short = short,
-            rf = rf),
+            rf = rf,leverage = leverage),
        fun,cov = cov,ret = ret,
        min_w = min_w,max_w = max_w)
 }
 sharpe_optim <- function(ret,cov,rf = 0,short = F){
   fun <- function(ret,cov,rf,short){
     if(short){
-      inversa <- solve(cov)
-      coefi <- ret-rf
-      w <- c((inversa %*% coefi)/sum(inversa %*% coefi))
-      multiplier <- 0
+      cov1 <- cbind(rbind(2*cov,ret-rf),ret-rf)
+      cov1[length(cov1)] <- 0
+      coefi <- c(rep(0,length(ret)),1)
+      w1 <- solve(cov1,coefi)
+      w <- w1[-length(w1)]/sum(w1[-length(w1)])
+      multiplier <- -w1[length(w1)]
     }else{
       Dmat <- 2 * cov
       dvec <- rep(0,length(ret))
@@ -143,26 +189,44 @@ sharpe_optim <- function(ret,cov,rf = 0,short = F){
     lista <- list(Return = return,
                   Sd = sd,
                   Weights = w,
+                  Leverage = sum(abs(w)),
                   Var_contribution = contri,
                   Return_contribution = ret_contr,
+                  Sharpe = (return-rf)/sd,
                   Multiplicador = multiplier)
   }
-  f <- possibly(fun,NULL)
+  f <- possibly(fun,quiet = T,NULL)
   pmap(list(rf = rf,
             short = short),
        f,ret = ret,cov = cov)
 }
 port_min_risk <- function(ret,cov,short = T,
-                          min_w = 0,max_w = 1){
-  fun <- function(ret,cov,short,min_w,max_w){
+                          min_w = 0,max_w = 1,
+                          leverage = NA){
+  fun <- function(ret,cov,short,min_w,max_w,leverage){
     if(short){
-      cova <- rbind(cbind(2*cov,1),1)
-      cova[nrow(cova),ncol(cova)] <- 0
-      inv_a <- solve(cova)
-      b <- c(rep(0,length(ret)),1)
-      w <- inv_a %*% b
-      multi <- w[length(w)]
-      w1 <- round(w[-length(w)]/sum(w[-length(w)]),6)
+      if(is.numeric(leverage)){
+        Dmat <- 2*cov
+        dvec <- rep(0, length(ret))
+        Amat <- cbind(rep(1,ncol(cov)))
+        bvec <- 1
+        AmatPos <- cbind(rep(-1,2*ncol(cov)))
+        bvecPos <- -leverage
+        result <- solveQPXT(Dmat = Dmat, dvec = dvec, 
+                            Amat = Amat, bvec = bvec, meq = 1,
+                            AmatPosNeg = AmatPos,bvecPosNeg = bvecPos)
+        w1 <- head(result$solution,ncol(cov))
+        w1 <- round(w1/sum(w1),6)
+        multi <- result$Lagrangian
+      }else{
+        cova <- rbind(cbind(2*cov,1),1)
+        cova[nrow(cova),ncol(cova)] <- 0
+        b <- c(rep(0,length(ret)),1)
+        w <- solve(cova,b)
+        multi <- w[length(w)]
+        w1 <- head(w,ncol(cov))
+        w1 <- round(w1/sum(w1),6)
+      }
     }else{
       Dmat <- 2 * cov
       dvec <- rep.int(0, length(ret))
@@ -181,32 +245,54 @@ port_min_risk <- function(ret,cov,short = T,
     ret_contr <- w1*ret/ret_m
     names(ret_contr) <- names(w1)
     lista <- list(Return = ret_m, Sd = sd_m,
-                  Weights = w1, Var_contribution = contri,
+                  Weights = w1,
+                  Leverage = sum(abs(w1)),
+                  Var_contribution = contri,
                   Return_contribution = ret_contr,
                   Multiplicador = multi)
     return(lista)
   }
-  pmap(list(short = short),
+  pmap(list(short = short,leverage = leverage),
        fun,ret = ret,cov = cov,min_w = min_w,
        max_w = max_w)
 }
 kelly_port <- function(ret,cov,rf = 0,use_rf = F,
-                       short = T,min_w = 0,max_w = 1){
+                       short = T,min_w = 0,max_w = 1,
+                       leverage = NA){
   if(use_rf){
     nomes <- colnames(cov)
     cov <- cbind(rbind(cov,0),0)
-    cov[length(cov)] <- 1e-16
+    cov[length(cov)] <- .Machine$double.eps
     ret <- c(ret,rf)
-    colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+    if(!is.null(nomes)){
+      colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+    }else{
+      colnames(cov) <- rownames(cov) <- names(ret) <- c(rep(NA,ncol(cov)-1),"Rf")
+    }
   }
-  fun <- function(ret,cov,rf,short,min_w,max_w){
+  fun <- function(ret,cov,rf,short,min_w,max_w,leverage){
     if(short){
-      cova1 <- cbind(rbind(cov,1),1)
-      cova1[nrow(cova1),ncol(cova1)] <- 0
-      coefs <- c(ret-rf,1/(1+rf))
-      w <- solve(cova1) %*% coefs
-      w1 <- c((1+rf)*w[-length(w)])
-      multiplier <- w[length(w)]
+      if(is.numeric(leverage)){
+        Dmat <- cov
+        dvec <- ret-rf
+        Amat <- cbind(rep(1,ncol(cov)))
+        bvec <- 1/(1+rf)
+        AmatPos <- cbind(rep(-1,2*ncol(cov)))
+        bvecPos <- -leverage/(1+rf)
+        result <- solveQPXT(Dmat = Dmat,dvec = dvec,Amat = Amat,bvec = bvec,meq = 1,
+                            AmatPosNeg = AmatPos,bvecPosNeg = bvecPos)
+        w1 <- head(result$solution,ncol(cov))
+        w1 <- round((1+rf)*w1,8)
+        w1 <- w1/sum(w1)
+        multiplier <- result$Lagrangian
+      }else{
+        cova1 <- cbind(rbind(cov,1),1)
+        cova1[nrow(cova1),ncol(cova1)] <- 0
+        coefs <- c(ret-rf,1/(1+rf))
+        w <- solve(cova1,coefs)
+        w1 <- (1+rf)*w[-length(w)]
+        multiplier <- w[length(w)]
+      }
     }else{
       min_w <- min_w/(1+rf)
       max_w <- max_w/(1+rf)
@@ -227,16 +313,18 @@ kelly_port <- function(ret,cov,rf = 0,use_rf = F,
     ret_contr <- w1*ret/return
     names(ret_contr) <- names(w1)
     lista <- list(Return = return,Sd = sd,Weights = w1,
+                  Leverage = sum(abs(w1)),
                   Var_contribution = contri,
                   Return_contribution = ret_contr,
                   Multiplicadores = multiplier)
     return(lista)
   }
-  pmap(list(short = short,rf = rf),
+  pmap(list(short = short,rf = rf,leverage = leverage),
        fun,ret = ret,cov = cov,min_w = min_w,max_w = max_w)
 }
 importance_portfolio <- function(ret,cov,lambda = 0.5,rf = NA,
-                                 short = T,min_w = 0,max_w = 1){
+                                 short = T,min_w = 0,max_w = 1,
+                                 leverage = NA){
   lambda <- lambda[lambda < 1 & lambda >= 0]
   if(length(lambda) == 0){
     return(NULL)
@@ -247,14 +335,27 @@ importance_portfolio <- function(ret,cov,lambda = 0.5,rf = NA,
     ret <- c(ret,rf)
     colnames(cov) <- rownames(cov) <- names(ret) <- c(names(ret)[-length(ret)],"Rf")
   }
-  fun <- function(ret,cov,lambda,short){
+  fun <- function(ret,cov,lambda,short,leverage){
     if(short){
-      sig <- cbind(rbind(cov,1),1)
-      sig[length(sig)] <- 0
-      coefs <- c(lambda*ret/(2*(1-lambda)),1)
-      a <- solve(sig)%*%(coefs)
-      w <- c(a[-length(a)])
-      mult <- c(tail(a,1))
+      if(is.numeric(leverage)){
+        dmat <- cov
+        dvec <- lambda*ret/(2*(1-lambda))
+        amat <- rep(1,ncol(cov))
+        bvec <- 1
+        AmatPos <- cbind(rep(-1,2*ncol(cov)))
+        bvecPos <- -leverage
+        res <- solveQPXT(Dmat = dmat,dvec = dvec,Amat = cbind(amat),bvec = bvec,
+                         AmatPosNeg = AmatPos,bvecPosNeg = bvecPos)
+        w <- round(res$solution[1:ncol(cov)],6)
+        mult <- res$Lagrangian
+      }else{
+        sig <- cbind(rbind(cov,1),1)
+        sig[length(sig)] <- 0
+        coefs <- c(lambda*ret/(2*(1-lambda)),1)
+        a <- solve(sig,coefs)
+        w <- round(a[-length(a)],6)
+        mult <- tail(a,1)
+      }
     }else{
       Dmat <- cov
       dvec <- lambda*ret/(2*(1-lambda))
@@ -275,26 +376,123 @@ importance_portfolio <- function(ret,cov,lambda = 0.5,rf = NA,
     lista <- list(Return = return,
                   Sd = sd,
                   Weights = w,
+                  Leverage = sum(abs(w)),
                   Var_contribution = contri,
                   Return_contribution = ret_contr,
+                  Importance = lambda*return-(1-lambda)*sd^2,
                   Multipliers = mult)
     return(lista)
   }
   pmap(list(lambda = lambda,
-            short = short),
+            short = short,leverage = leverage),
        fun,ret = ret,cov = cov)
 }
+min_track_error <- function(returns,benchmark,ret = NA,cov = NA,
+                            p_ret = NA,short = T,min_w = 0,max_w = 1,
+                            rf = NA,leverage = NA){
+  returns <- as.matrix(returns)
+  benchmark <- c(benchmark)
+  if(!is.na(rf)){
+    rf <- rf/252
+    returns <- cbind(returns,rf)
+  }
+  n <- ncol(returns)
+  if(all(is.na(ret))){
+    ret <- colMeans(returns)*252
+  }
+  if(all(is.na(cov))){
+    cov <- cov(returns)*252
+  }
+  if(!is.na(rf) & length(ret) != ncol(returns) & length(ret) == ncol(cov)){
+    cov <- cbind(rbind(cov,0),0)
+    cov[length(cov)] <- 1e-15
+    ret <- c(ret,rf*252)
+  }
+  fun <- function(short,min_w,max_w,p_ret,leverage){
+    vec <- c(t(benchmark) %*% returns)
+    mat <- t(returns) %*% returns
+    if(short){
+      if(is.numeric(leverage)){
+        Amat <- cbind(rep(1,n))
+        bvec <- 1
+        meq <- 1
+        if(!is.na(p_ret)){
+          Amat <- cbind(ret,Amat)
+          bvec <- c(p_ret,bvec)
+          meq <- 2
+        }
+        AmatPos <- cbind(rep(-1,2*ncol(mat)))
+        bvecPos <- -leverage
+        solu <- solveQPXT(Dmat = mat,dvec = vec,Amat = Amat,bvec = bvec,meq = meq,
+                          AmatPosNeg = AmatPos,bvecPosNeg = bvecPos)
+        w1 <- head(solu$solution,ncol(mat))
+        multiplier <- solu$Lagrangian
+      }
+      vec <- c(vec,1)
+      mat <- cbind(rbind(mat,1),1)
+      mat[length(mat)] <- 0
+      if(!is.na(p_ret)){
+        vec <- c(vec,p_ret)
+        mat <- cbind(rbind(mat,ret),ret)
+        mat[n+(1:2),n+(1:2)] <- 0
+      }
+      w <- solve(mat) %*% vec
+      multiplier <- -w[-c(1:n)]
+      w1 <- head(w[-length(w)],n)
+    }else{
+      Amat <- cbind(1,diag(n),-diag(n))
+      bvec <- c(1,rep(min_w,n),-rep(max_w,n))
+      meq <- 1
+      if(!is.na(p_ret)){
+        Amat <- cbind(ret,Amat)
+        bvec <- c(p_ret,bvec)
+        meq <- 2
+      }
+      solu <- solve.QP(mat,vec,Amat,bvec,meq = meq)
+      w1 <- solu$solution
+      multiplier <- solu$Lagrangian
+    }
+    w1 <- round(w1/sum(w1),6)
+    rets <- returns %*% w1
+    erro <- sqrt(sum((rets-benchmark)^2)/(length(rets)-1))
+    return <- c(w1 %*% ret)
+    sd <- c(sqrt(w1 %*% cov %*% w1))
+    contr <- c(w1 %*% cov * w1)/(sd^2)
+    contr <- round(contr,8)
+    ret_contr <- (w1*ret)/return
+    names(w1) <- names(contr) <- colnames(returns)
+    lista <- list(Return = return,
+                  Sd = sd,
+                  Weights = w1,
+                  Leverage = sum(abs(w1)),
+                  Var_contribution = contr,
+                  Return_contribution = ret_contr,
+                  Multiplicador = multiplier,
+                  Tracking_error = erro)
+    return(lista)
+  }
+  pmap(list(short = short,
+            min_w = min_w,max_w = max_w,
+            p_ret = p_ret,leverage = leverage),
+       fun)
+}
 port_vol_target <- function(ret,cov,vol_target = min(sqrt(diag(cov))),
-                            rf = NA,short = T,min_w = 0,max_w = 1){
-  fun <- function(cov,ret,short,vol,min_w,max_w,rf){
+                            rf = NA,short = T,min_w = 0,max_w = 1,
+                            leverage = NA){
+  fun <- function(cov,ret,short,vol,min_w,max_w,rf,leverage){
     if(is.numeric(rf)){
       nomes <- colnames(cov)
       cov <- cbind(rbind(cov,0),0)
-      cov[length(cov)] <- 1e-16
+      cov[length(cov)] <- .Machine$double.eps
       ret <- c(ret,rf)
-      colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+      if(!is.null(nomes)){
+        colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+      }else{
+        colnames(cov) <- rownames(cov) <- names(ret) <- c(rep(NA,ncol(cov)-1),"Rf")
+      }
     }
-    min_vol <- port_min_risk(ret,cov,short)[[1]]
+    min_vol <- port_min_risk(ret,cov,short,min_w = min_w,
+                             max_w = max_w,leverage = leverage)[[1]]
     if(vol_target <= min_vol$Sd){
       return(min_vol)
     }else{
@@ -303,8 +501,14 @@ port_vol_target <- function(ret,cov,vol_target = min(sqrt(diag(cov))),
       risco <- quad_form(pesos,cov)
       objetivo <- Maximize(t(pesos) %*% ret)
       if(short){
-        const <- list(sum(pesos) == 1,
-                      risco <= vol_target)
+        if(is.numeric(leverage)){
+          const <- list(sum(pesos) == 1,
+                        risco <= vol_target,
+                        norm(pesos) <= leverage)
+        }else{
+          const <- list(sum(pesos) == 1,
+                        risco <= vol_target)
+        }
       }else{
         const <- list(sum(pesos) == 1,
                       risco <= vol_target,
@@ -325,13 +529,14 @@ port_vol_target <- function(ret,cov,vol_target = min(sqrt(diag(cov))),
       lista <- list(Return = return,
                     Sd = sd,
                     Weights = w,
+                    Leverage = sum(abs(w)),
                     Var_contribution = contri,
                     Return_contribution = ret_contr)
       return(lista)
     }
   }
   pmap(list(vol = vol_target,
-            short = short,rf = rf),
+            short = short,rf = rf,leverage = leverage),
        fun,ret = ret,cov = cov,
        min_w = min_w,max_w = max_w)
 }
@@ -340,9 +545,13 @@ max_diversification <- function(ret,cov,rf = NA,short = T,min_w = 0,max_w = 1){
     if(is.numeric(rf)){
       nomes <- colnames(cov)
       cov <- cbind(rbind(cov,0),0)
-      cov[length(cov)] <- 1e-16
+      cov[length(cov)] <- .Machine$double.eps
       ret <- c(ret,rf)
-      colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+      if(!is.null(nomes)){
+        colnames(cov) <- rownames(cov) <- names(ret) <- c(nomes,"Rf")
+      }else{
+        colnames(cov) <- rownames(cov) <- names(ret) <- c(rep(NA,ncol(cov)-1),"Rf")
+      }
     }
     vols <- sqrt(diag(cov))
     fun <- function(x){
@@ -372,6 +581,7 @@ max_diversification <- function(ret,cov,rf = NA,short = T,min_w = 0,max_w = 1){
     lista <- list(Return = return,
                   Sd = sd,
                   Weights = w,
+                  Leverage = sum(abs(w)),
                   Var_contribution = contri,
                   Return_contribution = ret_contr,
                   Diversification = diversification,
@@ -386,7 +596,8 @@ momentum_utility_portfolio <- function(ret,cov,returns,rf = NA,delta = 3,
                                        freq = 1/252,min_ret = -1,short = F,
                                        popSize = 100,maxiter = 1000,
                                        min_ret_tot = -0.6,optim = T,
-                                       monitor = T,run = 50,elitism = 4){
+                                       monitor = T,run = 50,elitism = 4,
+                                       log = T){
   returns <- as.matrix(returns)
   if(is.numeric(rf)){
     rf1 <- (1+rf)^freq-1
@@ -401,8 +612,10 @@ momentum_utility_portfolio <- function(ret,cov,returns,rf = NA,delta = 3,
     fun <- function(x){
       x <- x/sum(x)
       rets <- returns %*% x
-      rets_tot <- cumprod(rets+1)-1
-      if(min(rets) <= min_ret | min(rets_tot) <= min_ret_tot){
+      rets_tot <- ifelse(log,exp(cumsum(rets)),cumprod(rets+1))
+      draw <- rets_tot/cummax(rets_tot)-1
+      rets_tot <- rets_tot-1
+      if(min(rets) <= min_ret | min(draw) <= min_ret_tot){
         return(-Inf)
       }
       mu <- c(x %*% ret)*freq
@@ -438,7 +651,8 @@ momentum_utility_portfolio <- function(ret,cov,returns,rf = NA,delta = 3,
     names(ret_contr) <- names(w)
     lista <- list(Return = return,
                   Sd = sd,
-                  Weights = w,Utility = utility,
+                  Weights = w,Leverage = sum(abs(w)),
+                  Utility = utility,
                   Var_contribution = contri,
                   Return_contribution = ret_contr,
                   Model = modelo)
@@ -450,7 +664,7 @@ momentum_utility_portfolio <- function(ret,cov,returns,rf = NA,delta = 3,
 }
 equal_risk_cont <- function(ret,cov,p_ret = NA,rf = NA,
                             short = T,min_w = 0,max_w = 1,
-                            expected_contr = NA){
+                            expected_contr = NA,p_sd = NA){
   nomes <- colnames(cov)
   fun1 <- function(ret,cov,p_ret,short,min_w,max_w,expected_contr,rf){
     if(is.numeric(rf)){
@@ -479,12 +693,26 @@ equal_risk_cont <- function(ret,cov,p_ret = NA,rf = NA,
       lb <- rep(min_w,length(ret))
       ub <- rep(max_w,length(ret))
     }
-    if(!is.na(p_ret)){
-      eq <- function(x){
-        c(x %*% ret,sum(x))
+    if(!is.na(p_ret)|!is.na(p_sd)){
+      if(!is.na(p_sd)&!is.na(p_ret)){
+        eq <- function(x){
+          c(x %*% ret,sum(x),x %*% cov %*% x)
+        }
+        a <- solnp(pars,fun,eqfun = eq,eqB = c(p_ret,1,p_sd^2),
+                   LB = lb,UB = ub,control = list(trace = F))
+      }else if(!is.na(p_sd)&is.na(p_ret)){
+        eq <- function(x){
+          c(sum(x),x %*% cov %*% x)
+        }
+        a <- solnp(pars,fun,eqfun = eq,eqB = c(1,p_sd^2),
+                   LB = lb,UB = ub,control = list(trace = F))
+      }else if(!is.na(p_ret)&is.na(p_sd)){
+        eq <- function(x){
+          c(sum(x),x %*% ret)
+        }
+        a <- solnp(pars,fun,eqfun = eq,eqB = c(1,p_ret),
+                   LB = lb,UB = ub,control = list(trace = F))
       }
-      a <- solnp(pars,fun,eqfun = eq,eqB = c(p_ret,1),
-                 LB = lb,UB = ub,control = list(trace = F))
     }else{
       eq <- function(x){
         c(sum(x))
@@ -504,6 +732,7 @@ equal_risk_cont <- function(ret,cov,p_ret = NA,rf = NA,
     lista <- list(Return = retorno,
                   Sd = sd,
                   Weights = w,
+                  Leverage = sum(abs(w)),
                   Var_contribution = contr,
                   Return_contribution = ret_contr)
     return(lista)
@@ -512,79 +741,4 @@ equal_risk_cont <- function(ret,cov,p_ret = NA,rf = NA,
             short = short,rf = rf),
        fun1,ret = ret,cov = cov,
        min_w = min_w,max_w = max_w,expected_contr = expected_contr)
-}
-portfolios <- function(ret,cov,returns,delta = 5,p_ret = 0.2,
-                       rf = NA,use_rf = T,short = T,min_w = 0,max_w = 1,
-                       lambda = 0.3,optimizer = c("sharpe","utility","min vol",
-                                                  "kelly","frontier","importance")){
-  returns <- as.matrix(returns)
-  optimizer <- tolower(optimizer)
-  fun <- function(ret,cov,returns,delta,p_ret,rf,use_rf,optimizer,short,min_w,max_w){
-    if(length(dim(cov)) == 2){
-      if(optimizer == "sharpe"){
-        rf <- ifelse(!is.numeric(rf),0,rf)
-        otimo <- sharpe_optim(ret,cov,rf = rf,short = short)[[1]]
-      }else if(optimizer == "utility"){
-        otimo <- utility_optim(ret,cov,delta,rf,short,min_w,max_w)[[1]]
-      }else if(optimizer == "min vol"){
-        otimo <- port_min_risk(ret,cov,short,min_w,max_w)[[1]]
-      }else if(optimizer == "kelly"){
-        rf <- ifelse(!is.numeric(rf),0,rf)
-        otimo <- kelly_port(ret,cov,rf,use_rf,short,min_w,max_w)[[1]]
-      }else if(optimizer == "frontier"){
-        otimo <- portfront(ret,cov,p_ret,rf,short,min_w,max_w)[[1]]
-      }else if(optimizer == "importance"){
-        otimo <- importance_portfolio(ret,cov,lambda,rf,short,min_w,max_w)[[1]]
-      }
-      pesos <- otimo$Weights
-      sds <- otimo$Sd
-      if(length(pesos) == ncol(returns)+1){
-        rf1 <- (1+rf)^(1/252)-1
-        returns <- cbind(returns,Rf = rf1)
-      }
-      rets <- returns %*% pesos
-      ret_e <- otimo$Return
-    }else{
-      if(optimizer == "sharpe"){
-        rf <- ifelse(!is.numeric(rf),0,rf)
-        otimo <- apply(cov,3,sharpe_optim,ret = ret,rf = rf,short = short)
-      }else if(optimizer == "utility"){
-        otimo <- apply(cov,3,utility_optim,ret = ret,
-                       rf = rf,short = short,delta = delta,
-                       min_w = min_w,max_w = max_w)
-      }else if(optimizer == "min vol"){
-        otimo <- apply(cov,3,port_min_risk,ret = ret,
-                       short = short,min_w = min_w,max_w = max_w)
-      }else if(optimizer == "kelly"){
-        rf <- ifelse(!is.numeric(rf),0,rf)
-        otimo <- apply(cov,3,kelly_port,ret = ret,rf = rf,short = short,
-                       use_rf = use_rf,min_w = min_w,max_w = max_w)
-      }else if(optimizer == "frontier"){
-        otimo <- apply(cov,3,portfront,ret = ret,rf = rf,short = short,
-                       min_w = min_w,max_w = max_w,p_ret = p_ret)
-      }else if(optimizer == "importance"){
-        otimo <- apply(cov,3,importance_portfolio,ret = ret,lambda = lambda,rf = rf,
-                       short = short,min_w = min_w,max_w = max_w)
-      }
-      otimo <- lapply(otimo,function(x)x[[1]])
-      pesos <- sapply(otimo,function(x)x$Weights) %>%
-        t
-      sds <- sapply(otimo,function(x)x$Sd)
-      if(ncol(pesos) == ncol(returns)+1){
-        rf1 <- (1+rf)^(1/252)-1
-        returns <- cbind(returns,Rf = rf1)
-      }
-      rets <- sapply(1:nrow(returns),function(i)pesos[i,] %*% returns[i,])
-      ret_e <- sapply(otimo,function(x)x$Return)
-    }
-    lista <- list(Weights = as.data.frame(pesos) %>% mutate(portfolio = optimizer),
-                  Sd = sds,Return_Expec = ret_e,
-                  Returns = rets)
-    return(lista)
-  }
-  l <- pmap(list(delta = delta,optimizer = optimizer,
-                 short = short,min_w = min_w,max_w = max_w,p_ret = p_ret),
-            fun,ret = ret,cov = cov,returns = returns,rf = rf,use_rf = use_rf)
-  names(l) <- optimizer
-  return(l)
 }
